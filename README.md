@@ -1,11 +1,15 @@
 > [!NOTE]
-> Please ensure you're downloading from this official repository. An infringing copy has been published on GitHub and the Microsoft Store with no attribution, in violation of the MIT License — DMCA notices have been filed.
+> This repository is a fork of the official [iandiv/AppGroup](https://github.com/iandiv/AppGroup) project. Upstream AppGroup releases and attribution remain with the original project. This fork is being evolved toward a modern Windows 11 Bins-style taskbar grouping experience while preserving the MIT license and upstream history.
+
 ---
 ![AppGroup](https://github.com/user-attachments/assets/169e1383-fe84-4f6b-997e-75ee218abe0c)
 
 # App Group
 
 Organize, customize, and launch your apps from the Windows taskbar. Create groups with custom icons, nest subgroups, and pin everything with a single drag.
+
+> [!IMPORTANT]
+> **Fork direction:** application behavior has not been intentionally rebranded or rewritten yet. Development is following the dependency-aware plan in [docs/roadmap.md](docs/roadmap.md), with architectural guardrails in [docs/architecture.md](docs/architecture.md), Windows regression coverage in [docs/testing.md](docs/testing.md), and upstream-sync rules in [docs/upstream.md](docs/upstream.md). The core objective is a fast, reliable Windows 11 taskbar stack utility inspired by the interaction model of 1UP Industries Bins, without Explorer injection or taskbar patching.
 
 ## Table of Contents
 
@@ -75,8 +79,10 @@ App Group is available in four variants:
 
 **Not sure which to pick?** Download **Setup (Bundled)** — it includes everything you need.
 
-1. Go to the [Releases page](https://github.com/iandiv/AppGroup/releases) and download your preferred variant.
+1. Go to the [upstream AppGroup Releases page](https://github.com/iandiv/AppGroup/releases) and download your preferred variant if you want the current upstream application.
 2. Run the `.exe` installer (Setup), or extract the `.zip` and run `AppGroup.exe` (Portable).
+
+> This fork is currently a development fork. Do not assume its future development builds are interchangeable with upstream stable releases unless a fork release explicitly says so.
 
 ---
 
@@ -138,16 +144,16 @@ UWP apps (like Calculator or Settings) don't appear as regular files. To add the
 
 ## Support
 
-App Group is actively maintained. If you find it useful, consider supporting development:
+For the upstream AppGroup project, see [iandiv/AppGroup](https://github.com/iandiv/AppGroup). If you find the upstream project useful, consider supporting its developer:
 
 **[☕ Donate on Ko-fi](https://ko-fi.com/iandiv/tip)**
 
 <a href="https://ko-fi.com/iandiv/tip" target="_blank">
-  <img src="https://github.com/user-attachments/assets/2e1376d4-d3a5-4ac4-95fc-e5aa512a1704" width="400" alt="Ko-fi donation">
+  <img src="https://github.com/user-attachments/assets/2e1376d4-d3a5-4acb-5c8cf49ae2a8" width="400" alt="Ko-fi donation">
 </a>
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE) for details. This fork preserves the upstream project history and license.
