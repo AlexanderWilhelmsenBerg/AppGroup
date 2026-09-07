@@ -1,3 +1,5 @@
+using Xunit;
+
 namespace AppGroup.Tests;
 
 public sealed class FoundationSmokeTests
