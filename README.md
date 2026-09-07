@@ -149,7 +149,7 @@ For the upstream AppGroup project, see [iandiv/AppGroup](https://github.com/iand
 **[☕ Donate on Ko-fi](https://ko-fi.com/iandiv/tip)**
 
 <a href="https://ko-fi.com/iandiv/tip" target="_blank">
-  <img src="https://github.com/user-attachments/assets/2e1376d4-d3a5-4acb-5c8cf49ae2a8" width="400" alt="Ko-fi donation">
+  <img src="https://github.com/user-attachments/assets/2e1376d4-d3a5-4ac4-95fc-e5aa512a1704" width="400" alt="Ko-fi donation">
 </a>
 
 ---
