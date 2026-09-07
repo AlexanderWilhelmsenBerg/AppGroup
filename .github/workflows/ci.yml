@@ -37,4 +37,4 @@ jobs:
         run: dotnet restore .\tests\AppGroup.Tests\AppGroup.Tests.csproj
 
       - name: Run tests
-        run: dotnet run --project .\tests\AppGroup.Tests\AppGroup.Tests.csproj --configuration Release --no-restore
+        run: dotnet test .\tests\AppGroup.Tests\AppGroup.Tests.csproj --configuration Release --no-restore --verbosity normal
