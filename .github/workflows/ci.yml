@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Windows x64 build and tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore AppGroup
+        run: dotnet restore .\AppGroup\AppGroup.csproj -p:Platform=x64 -r win-x64
+
+      - name: Build AppGroup
+        run: dotnet build .\AppGroup\AppGroup.csproj --configuration Release --no-restore -p:Platform=x64 -r win-x64
+
+      - name: Restore tests
+        run: dotnet restore .\tests\AppGroup.Tests\AppGroup.Tests.csproj
+
+      - name: Run tests
+        run: dotnet run --project .\tests\AppGroup.Tests\AppGroup.Tests.csproj --configuration Release --no-restore
