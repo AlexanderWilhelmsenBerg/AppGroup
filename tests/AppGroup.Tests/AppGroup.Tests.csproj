@@ -15,4 +15,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\AppGroup\WindowTracking\*.cs"
+             Link="WindowTracking\%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
