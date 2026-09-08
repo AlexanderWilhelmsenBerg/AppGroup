@@ -8,20 +8,26 @@ The upstream `master` commit at the fork point was:
 
 - `00ec0af70810e84fdcc3899c678e5f1dbd106680` — `Prevent duplicate mouse hook initialization`
 
-PR0 intentionally does not change application behavior. Its code-affecting changes are limited to build/test infrastructure and solution metadata required to include the test project.
+The latest stable upstream release at the fork baseline is `v1.5.0`. The selected upstream `master` snapshot is 11 commits ahead of that release, so the fork deliberately starts from current upstream source rather than downgrading to the older release commit.
+
+Upstream derives the application version from the nearest Git tag. GitHub forks do not automatically expose upstream tags to CI/local clones, which initially caused this newer source to be mislabeled as `1.0.0` and made AppGroup incorrectly offer `v1.5.0` as an update. PR0 therefore fetches upstream release tags in CI, verifies the built EXE matches the nearest upstream release line, and provides a fork-safe `1.5.0` fallback when tags are unavailable.
+
+PR0 intentionally does not change application runtime behavior. Its code-affecting changes are limited to build/test/version metadata infrastructure and solution metadata required to include the test project.
 
 ## Automated baseline
 
 The CI contract for PR0 is:
 
 1. run on a GitHub-hosted Windows runner;
-2. install .NET 8;
-3. restore the existing AppGroup WinUI project for `win-x64`;
-4. build AppGroup in `Release` / `x64`;
-5. stage the exact Release `win-x64` output as a smoke-test bundle;
-6. restore the independent test project;
-7. execute the test suite;
-8. upload the staged build as the `AppGroup-win-x64` workflow artifact.
+2. fetch upstream AppGroup release tags;
+3. install .NET 8;
+4. restore the existing AppGroup WinUI project for `win-x64`;
+5. build AppGroup in `Release` / `x64`;
+6. verify the produced EXE reports the nearest upstream release version;
+7. stage the exact Release `win-x64` output as a smoke-test bundle;
+8. restore the independent test project;
+9. execute the test suite;
+10. upload the staged build as the `AppGroup-win-x64` workflow artifact.
 
 A passing `CI / Windows x64 build and tests` check establishes the automated baseline for the fork. The uploaded artifact is retained for 14 days and is the preferred build for the manual PR0 smoke test so the interactive test exercises the same commit and build output that CI validated.
 
@@ -38,6 +44,8 @@ A GUI/runtime smoke check cannot be treated as meaningful on a headless GitHub r
 Minimum smoke check:
 
 - [ ] AppGroup starts normally from the extracted CI artifact.
+- [ ] The app reports the expected upstream release line (`1.5.0` at the PR0 baseline), not the obsolete `1.0.0` fallback.
+- [ ] No false update prompt to `v1.5.0` appears.
 - [ ] Main configuration window opens.
 - [ ] An existing group can be opened from its taskbar shortcut.
 - [ ] Popup appears adjacent to the taskbar on the primary monitor.
