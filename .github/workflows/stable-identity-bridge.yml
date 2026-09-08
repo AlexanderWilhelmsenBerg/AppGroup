@@ -1,0 +1,49 @@
+name: Stable Identity Branch Bridge
+
+on:
+  push:
+    branches: [feature/stable-identity]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: feature/stable-identity
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Apply narrow identity bridge edits
+        run: python .\tools\apply_stable_identity_bridge.py
+
+      - name: Commit bridge edits
+        shell: pwsh
+        run: |
+          if (git diff --quiet) { exit 0 }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AppGroup tests
+          git commit -m "Wire stable identity through existing UI flows"
+          git push origin HEAD:feature/stable-identity
+
+      - name: Restore AppGroup
+        run: dotnet restore .\AppGroup\AppGroup.csproj -p:Platform=x64 -r win-x64
+
+      - name: Build AppGroup with zero warnings
+        run: dotnet build .\AppGroup\AppGroup.csproj --configuration Release --no-restore -p:Platform=x64 -r win-x64 -warnaserror
+
+      - name: Restore tests
+        run: dotnet restore .\tests\AppGroup.Tests\AppGroup.Tests.csproj
+
+      - name: Run tests with zero warnings
+        run: dotnet test .\tests\AppGroup.Tests\AppGroup.Tests.csproj --configuration Release --no-restore --verbosity normal -warnaserror
