@@ -18,18 +18,26 @@ The CI contract for PR0 is:
 2. install .NET 8;
 3. restore the existing AppGroup WinUI project for `win-x64`;
 4. build AppGroup in `Release` / `x64`;
-5. restore the independent test project;
-6. execute the test suite.
+5. stage the exact Release `win-x64` output as a smoke-test bundle;
+6. restore the independent test project;
+7. execute the test suite;
+8. upload the staged build as the `AppGroup-win-x64` workflow artifact.
 
-A passing `CI / Windows x64 build and tests` check establishes the automated baseline for the fork.
+A passing `CI / Windows x64 build and tests` check establishes the automated baseline for the fork. The uploaded artifact is retained for 14 days and is the preferred build for the manual PR0 smoke test so the interactive test exercises the same commit and build output that CI validated.
+
+## Inherited compiler-warning baseline
+
+The first CI baseline exposed 10 nullable-reference warnings in existing upstream AppGroup application source. PR0 does not modify those files, so the warnings are inherited baseline debt rather than regressions caused by this fork.
+
+They are tracked separately in GitHub issue #2, `Baseline cleanup: eliminate inherited nullable-reference warnings`, with the goal of reaching a zero-warning build without changing runtime behavior. The warning cleanup is intentionally kept out of PR0 so the first Windows 11 runtime smoke test remains an unchanged-upstream application baseline.
 
 ## Manual Windows 11 smoke baseline
 
-A GUI/runtime smoke check cannot be treated as meaningful on a headless GitHub runner. Before PR1 changes configuration identity, verify the current build once on an interactive Windows 11 desktop.
+A GUI/runtime smoke check cannot be treated as meaningful on a headless GitHub runner. Before PR1 changes configuration identity, download the `AppGroup-win-x64` artifact from the successful PR0 workflow run, extract it, and verify the current build once on an interactive Windows 11 desktop.
 
 Minimum smoke check:
 
-- [ ] AppGroup starts normally.
+- [ ] AppGroup starts normally from the extracted CI artifact.
 - [ ] Main configuration window opens.
 - [ ] An existing group can be opened from its taskbar shortcut.
 - [ ] Popup appears adjacent to the taskbar on the primary monitor.
