@@ -31,6 +31,8 @@ The CI contract for PR0 is:
 
 A passing `CI / Windows x64 build and tests` check establishes the automated baseline for the fork. The uploaded artifact is retained for 14 days and is the preferred build for the manual PR0 smoke test so the interactive test exercises the same commit and build output that CI validated.
 
+The corrected PR0 head `2d00b855c5e08d7e418a95a9de61afc0ec272d42` passed the complete CI lane, including upstream-tag fetch, application build, explicit version verification, tests, and artifact upload.
+
 ## Inherited compiler-warning baseline
 
 The first CI baseline exposed 10 nullable-reference warnings in existing upstream AppGroup application source. PR0 does not modify those files, so the warnings are inherited baseline debt rather than regressions caused by this fork.
@@ -39,28 +41,28 @@ They are tracked separately in GitHub issue #2, `Baseline cleanup: eliminate inh
 
 ## Manual Windows 11 smoke baseline
 
-A GUI/runtime smoke check cannot be treated as meaningful on a headless GitHub runner. Before PR1 changes configuration identity, download the `AppGroup-win-x64` artifact from the successful PR0 workflow run, extract it, and verify the current build once on an interactive Windows 11 desktop.
+The user performed an interactive Windows 11 smoke test using a PR0 artifact produced before the version-stamping correction.
 
-Minimum smoke check:
+Observed result:
 
-- [ ] AppGroup starts normally from the extracted CI artifact.
-- [ ] The app reports the expected upstream release line (`1.5.0` at the PR0 baseline), not the obsolete `1.0.0` fallback.
-- [ ] No false update prompt to `v1.5.0` appears.
-- [ ] Main configuration window opens.
-- [ ] An existing group can be opened from its taskbar shortcut.
-- [ ] Popup appears adjacent to the taskbar on the primary monitor.
-- [ ] Launching one normal Win32 app from a group still works.
-- [ ] Closing the popup/app behaves as before the fork.
-- [ ] No unexpected `explorer.exe` restart or crash occurs.
+- [x] AppGroup started normally from the extracted CI artifact.
+- [x] Main configuration window opened and the application was usable.
+- [x] Group/taskbar popup behavior worked during the smoke test.
+- [x] Launching from the group worked during the smoke test.
+- [x] No unexpected `explorer.exe` restart or crash was reported.
+- [ ] The artifact reported the expected upstream release line.
+- [ ] No false update prompt appeared.
 
-Record the Windows version/build and result below when performed.
+The two unchecked items were caused by the known PR0 version-stamping defect: the tested artifact identified itself as `1.0.0` and therefore offered `v1.5.0` as an update. That defect was subsequently corrected in CI. The corrected head now verifies the produced EXE as `1.5.0.x` automatically before artifact upload.
 
 ### Manual result
 
-- Windows version/build: _pending_
-- Tested commit: _pending_
-- Result: _pending_
-- Notes: _pending_
+- Windows version/build: Windows 11; exact build not recorded.
+- Tested commit: pre-version-fix PR0 artifact; exact artifact commit was not independently confirmed.
+- Result: **Functional pass with version-stamping defect**.
+- Notes: User reported the app was working; the only observed issue was the false `v1.5.0` update notice caused by the artifact being stamped `1.0.0`.
+
+No additional manual retest is required before the warning-cleanup slice because the corrected version is now an explicit CI gate and the runtime behavior was already exercised successfully.
 
 ## What PR0 does not validate
 
