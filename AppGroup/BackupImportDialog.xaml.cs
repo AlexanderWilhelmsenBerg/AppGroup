@@ -21,7 +21,7 @@
                 get => _isSelected;
                 set { _isSelected = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected))); }
             }
-            public event PropertyChangedEventHandler PropertyChanged;
+            public event PropertyChangedEventHandler? PropertyChanged;
         }
 
         public sealed partial class BackupImportDialog : ContentDialog {
