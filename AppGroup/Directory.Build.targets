@@ -1,0 +1,22 @@
+<Project>
+  <!--
+    Fork-safe version fallback.
+
+    Upstream AppGroup derives its version from the nearest Git tag. GitHub forks do not
+    automatically carry upstream tags into CI/local clones, which caused post-v1.5.0
+    source to be mislabeled as 1.0.0. Keep this fallback aligned with the latest stable
+    upstream release at the fork baseline; when an upstream tag is available, the
+    project's SetVersionFromGitTag target still overrides these values.
+  -->
+  <PropertyGroup>
+    <AppGroupForkFallbackVersion>1.5.0</AppGroupForkFallbackVersion>
+  </PropertyGroup>
+
+  <Target Name="SetForkFallbackVersion" BeforeTargets="SetVersionFromGitTag">
+    <PropertyGroup>
+      <Version>$(AppGroupForkFallbackVersion)</Version>
+      <AssemblyVersion>$(AppGroupForkFallbackVersion).0</AssemblyVersion>
+      <FileVersion>$(AppGroupForkFallbackVersion).0</FileVersion>
+    </PropertyGroup>
+  </Target>
+</Project>
