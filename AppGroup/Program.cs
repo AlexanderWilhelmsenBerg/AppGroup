@@ -1,333 +1,273 @@
-﻿using Microsoft.UI.Dispatching;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.Windows.AppLifecycle;
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.UI.StartScreen;
-namespace AppGroup {
-    public class Program {
 
+namespace AppGroup
+{
+    public class Program
+    {
         public static NativeMethods.POINT InitialClickPos;
-        [STAThread]
-        
+        public static string? InitialStableGroupId { get; private set; }
 
-        static void Main(string[] args) {
+        [STAThread]
+        static void Main(string[] args)
+        {
             NativeMethods.GetCursorPos(out InitialClickPos);
-            // Register the same message as your receiver
-            int msgId = NativeMethods.WM_UPDATE_GROUP;
             string[] cmdArgs = Environment.GetCommandLineArgs();
             bool isSilent = HasSilentFlag(cmdArgs);
 
-           
+            try
+            {
+                JsonConfigHelper.EnsureCurrentSchema();
+            }
+            catch (ConfigMigrationException ex)
+            {
+                ShowActivationError("AppGroup could not migrate its configuration safely. The original file was left unchanged.\n\n" + ex.Message);
+                return;
+            }
 
-            // Check if running without arguments and another instance is already running
-            if (cmdArgs.Length <= 1 && !isSilent) {
-              
-              
+            if (cmdArgs.Length <= 1 && !isSilent)
+            {
                 IntPtr existingMainHWnd = NativeMethods.FindWindow(null, "App Group");
-                if (existingMainHWnd != IntPtr.Zero) {
+                if (existingMainHWnd != IntPtr.Zero)
+                {
                     NativeMethods.SendString(existingMainHWnd, "__SHOW_MAIN__");
                     return;
                 }
             }
 
-          
-
-            if (!isSilent && cmdArgs.Length > 1) {
+            if (!isSilent && cmdArgs.Length > 1)
+            {
+                string command = cmdArgs[1];
                 IntPtr existingPopupHWnd = NativeMethods.FindWindow(null, "Popup Window");
                 IntPtr existingEditHWnd = NativeMethods.FindWindow(null, "Edit Group");
                 IntPtr existingMainHWnd = NativeMethods.FindWindow(null, "App Group");
 
-                // Handle existing windows in constructor for faster response
-                string command = cmdArgs[1];
+                if (string.Equals(command, "EditGroupWindow", StringComparison.OrdinalIgnoreCase))
+                {
+                    string? stableId = ExtractStableGroupSelector(cmdArgs, allowLegacyName: false);
+                    int groupSlot = ResolveEditSlot(cmdArgs, stableId);
+                    SaveGroupIdToFile(groupSlot.ToString(CultureInfo.InvariantCulture));
 
-                if (command == "EditGroupWindow") {
-                    // AppGroup.exe EditGroupWindow --id
-                    int groupId = ExtractIdFromCommandLine(cmdArgs);
-                    SaveGroupIdToFile(groupId.ToString());
-
-
-                    if (existingEditHWnd != IntPtr.Zero) {
-
-                        EditGroupHelper editGroup = new EditGroupHelper("Edit Group", groupId);
+                    if (existingEditHWnd != IntPtr.Zero)
+                    {
+                        EditGroupHelper editGroup = new("Edit Group", groupSlot);
                         editGroup.Activate();
-                        //InitializeJumpListSync();   
                         return;
                     }
-                    else if (existingMainHWnd != IntPtr.Zero || existingPopupHWnd != IntPtr.Zero) {
-
+                    if (existingMainHWnd != IntPtr.Zero || existingPopupHWnd != IntPtr.Zero)
+                    {
                         return;
                     }
                 }
-                if (command == "LaunchAll") {
-                    string targetGroupName = ExtractGroupNameFromCommandLine(cmdArgs);
-                    Task.Run(async () => {
-                        await JsonConfigHelper.LaunchAll(targetGroupName);
-                    });
+                else if (string.Equals(command, "LaunchAll", StringComparison.OrdinalIgnoreCase))
+                {
+                    string? selector = ExtractStableGroupSelector(cmdArgs, allowLegacyName: true);
+                    if (string.IsNullOrWhiteSpace(selector))
+                    {
+                        ShowActivationError("The Launch All command does not identify a valid group.");
+                        return;
+                    }
 
-                    InitializeJumpListSync();  // If you want to update jump list
-                    return;  // Exit immediately after launching apps
-                }
+                    GroupResolution launchResolution = JsonConfigHelper.ResolveGroup(selector, allowLegacyName: true);
+                    if (!TryAcceptResolution(launchResolution, selector, out string stableId))
+                    {
+                        return;
+                    }
 
-                try {
-                    int groupId = JsonConfigHelper.FindKeyByGroupName(command);
-                    SaveGroupIdToFile(groupId.ToString());
-                }
-                catch (Exception ex) {
-                    System.Diagnostics.Debug.WriteLine($"Failed to find group ID for '{command}': {ex.Message}");
-                }
-
-                if (existingPopupHWnd != IntPtr.Zero) {
-                    NativeMethods.SendString(existingPopupHWnd, command);
-                    NativeMethods.ForceForegroundWindow(existingPopupHWnd);
-                    InitializeJumpListSync();
+                    Task.Run(() => JsonConfigHelper.LaunchAll(stableId));
+                    InitializeJumpListSync(stableId);
                     return;
+                }
+                else
+                {
+                    string? selector = ExtractNormalGroupSelector(cmdArgs);
+                    if (string.IsNullOrWhiteSpace(selector))
+                    {
+                        ShowActivationError("The group shortcut does not contain a valid group identifier.");
+                        return;
+                    }
+
+                    GroupResolution resolution = JsonConfigHelper.ResolveGroup(selector, allowLegacyName: true);
+                    if (!TryAcceptResolution(resolution, selector, out string stableId))
+                    {
+                        return;
+                    }
+
+                    InitialStableGroupId = stableId;
+                    int groupSlot = int.Parse(resolution.Group!.Slot, CultureInfo.InvariantCulture);
+                    SaveGroupIdToFile(groupSlot.ToString(CultureInfo.InvariantCulture));
+
+                    if (existingPopupHWnd != IntPtr.Zero)
+                    {
+                        NativeMethods.SendString(existingPopupHWnd, stableId);
+                        NativeMethods.ForceForegroundWindow(existingPopupHWnd);
+                        InitializeJumpListSync(stableId);
+                        return;
+                    }
                 }
             }
 
             WinRT.ComWrappersSupport.InitializeComWrappers();
-
-
-            if (cmdArgs.Length <= 1 && !isSilent) {
-                // No arguments provided - check for existing main window instance
-                IntPtr existingMainHWnd = NativeMethods.FindWindow(null, "App Group");
-                if (existingMainHWnd != IntPtr.Zero) {
-                    // Bring existing instance to foreground and exit
-                    NativeMethods.SetForegroundWindow(existingMainHWnd);
-                    NativeMethods.ShowWindow(existingMainHWnd, NativeMethods.SW_RESTORE);
-
-                }
-            }
-
-
-
-            Application.Start((p) => {
-                var context = new DispatcherQueueSynchronizationContext(
-                    DispatcherQueue.GetForCurrentThread());
+            Application.Start(_ =>
+            {
+                DispatcherQueueSynchronizationContext context = new(DispatcherQueue.GetForCurrentThread());
                 SynchronizationContext.SetSynchronizationContext(context);
                 _ = new App();
             });
-
-
         }
 
-        private static void InitializeJumpListSync() {
-            try {
-                Task.Run(async () => await InitializeJumpListAsync()).Wait();
+        private static bool TryAcceptResolution(GroupResolution resolution, string selector, out string stableId)
+        {
+            stableId = string.Empty;
+            if (resolution.Status == GroupResolutionStatus.Found && resolution.Group is not null)
+            {
+                stableId = resolution.Group.StableId;
+                return true;
             }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Sync jump list initialization failed: {ex.Message}");
+
+            if (resolution.Status == GroupResolutionStatus.Ambiguous)
+            {
+                ShowActivationError(
+                    $"More than one AppGroup group is named '{selector}'.\n\n" +
+                    "This legacy name-based shortcut is ambiguous and was not opened. Open AppGroup and re-pin the intended group so the shortcut uses its stable ID.");
+            }
+            else
+            {
+                ShowActivationError(
+                    $"AppGroup could not find the group '{selector}'.\n\n" +
+                    "The shortcut may be stale. Open AppGroup and pin the group again.");
+            }
+            return false;
+        }
+
+        private static int ResolveEditSlot(string[] args, string? stableId)
+        {
+            if (!string.IsNullOrWhiteSpace(stableId))
+            {
+                return JsonConfigHelper.FindKeyByStableGroupId(stableId);
+            }
+
+            foreach (string arg in args)
+            {
+                if (arg.StartsWith("--id=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(arg[5..], NumberStyles.None, CultureInfo.InvariantCulture, out int legacySlot))
+                {
+                    return legacySlot;
+                }
+            }
+
+            throw new KeyNotFoundException("The Edit Group command does not identify an existing group.");
+        }
+
+        private static string? ExtractNormalGroupSelector(string[] args)
+        {
+            string? typed = ExtractStableGroupSelector(args, allowLegacyName: false);
+            if (!string.IsNullOrWhiteSpace(typed))
+            {
+                return typed;
+            }
+
+            if (args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal))
+            {
+                return args[1];
+            }
+
+            return null;
+        }
+
+        private static string? ExtractStableGroupSelector(string[] args, bool allowLegacyName)
+        {
+            for (int index = 1; index < args.Length; index++)
+            {
+                string arg = args[index];
+                if (arg.StartsWith("--group=", StringComparison.OrdinalIgnoreCase))
+                {
+                    return arg[8..].Trim('"');
+                }
+                if (string.Equals(arg, "--group", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length)
+                {
+                    return args[index + 1].Trim('"');
+                }
+                if (allowLegacyName && arg.StartsWith("--groupName=", StringComparison.OrdinalIgnoreCase))
+                {
+                    return arg[12..].Trim('"');
+                }
+                if (allowLegacyName && arg.StartsWith("--groupId=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(arg[10..], NumberStyles.None, CultureInfo.InvariantCulture, out int legacySlot))
+                {
+                    string stableId = JsonConfigHelper.FindStableIdByKey(legacySlot);
+                    return string.IsNullOrWhiteSpace(stableId) ? null : stableId;
+                }
+            }
+            return null;
+        }
+
+        private static void InitializeJumpListSync(string stableGroupId)
+        {
+            try
+            {
+                Task.Run(() => InitializeJumpListAsync(stableGroupId)).Wait();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Sync jump list initialization failed: {ex.Message}");
             }
         }
 
-
-
-        private static async Task InitializeJumpListAsync() {
-            try {
-                string[] cmdArgs = Environment.GetCommandLineArgs();
+        private static async Task InitializeJumpListAsync(string stableGroupId)
+        {
+            try
+            {
                 JumpList jumpList = await JumpList.LoadCurrentAsync();
-
-                System.Diagnostics.Debug.WriteLine($"Jump list initialization started with args: {string.Join(", ", cmdArgs)}");
-
-                // Only modify jump list when there ARE arguments
-                if (cmdArgs.Length > 1) {
-                    string command = cmdArgs[1];
-
-                    System.Diagnostics.Debug.WriteLine($"Processing command: '{command}'");
-
-                    jumpList.Items.Clear();
-
-                    if (command == "EditGroupWindow") {
-                        // For EditGroupWindow command
-                        System.Diagnostics.Debug.WriteLine("Creating jump list for EditGroupWindow");
-                        var jumpListItem = CreateJumpListItemTask();
-                        var launchAllItem = CreateLaunchAllJumpListItem();
-
-                        jumpList.Items.Add(jumpListItem);
-                        jumpList.Items.Add(launchAllItem);
-                    }
-                    else if (command == "LaunchAll") {
-                        // For LaunchAll command
-                        System.Diagnostics.Debug.WriteLine("Creating jump list for LaunchAll");
-                        
-                    }
-                    else {
-                        // This is a group name like "CH"
-                        System.Diagnostics.Debug.WriteLine($"Creating jump list for group name: '{command}'");
-
-                        // Verify the group exists before creating jump list items
-                        if (JsonConfigHelper.GroupExistsInJson(command)) {
-                            var jumpListItem = CreateJumpListItemTask();
-                            var launchAllItem = CreateLaunchAllJumpListItem();
-
-                            jumpList.Items.Add(jumpListItem);
-                            jumpList.Items.Add(launchAllItem);
-
-                            System.Diagnostics.Debug.WriteLine($"Jump list items created for group '{command}'");
-                        }
-                        else {
-                            System.Diagnostics.Debug.WriteLine($"Group '{command}' does not exist in JSON");
-                        }
-                    }
-
-                    await jumpList.SaveAsync();
-                    System.Diagnostics.Debug.WriteLine("Jump list saved successfully");
-                }
-                else {
-                    System.Diagnostics.Debug.WriteLine("No arguments provided, jump list not modified");
-                }
+                jumpList.Items.Clear();
+                jumpList.Items.Add(JumpListItem.CreateWithArguments(
+                    JsonConfigHelper.BuildEditActivationArguments(stableGroupId),
+                    "Edit this Group"));
+                jumpList.Items.Add(JumpListItem.CreateWithArguments(
+                    JsonConfigHelper.BuildLaunchAllArguments(stableGroupId),
+                    "Launch All"));
+                await jumpList.SaveAsync();
             }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Jump list initialization failed: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Jump list initialization failed: {ex.Message}");
             }
         }
 
-
-
-        private static JumpListItem CreateJumpListItemTask() {
-            try {
-                string[] cmdArgs = Environment.GetCommandLineArgs();
-                System.Diagnostics.Debug.WriteLine($"CreateJumpListItemTask called with args: {string.Join(", ", cmdArgs)}");
-
-                if (cmdArgs.Length > 1) {
-                    string command = cmdArgs[1];
-                    System.Diagnostics.Debug.WriteLine($"Processing command: '{command}'");
-
-                    if (command == "EditGroupWindow") {
-                        int groupId = ExtractIdFromCommandLine(cmdArgs);
-                        SaveGroupIdToFile(groupId.ToString());
-                        var taskItem = JumpListItem.CreateWithArguments("EditGroupWindow --id=" + groupId, "Edit this Group");
-                        System.Diagnostics.Debug.WriteLine($"Created EditGroupWindow jump list item with ID: {groupId}");
-                        return taskItem;
-                    }
-                    else if (command != "LaunchAll") {
-                        // This is a group name like "CH"
-                        try {
-                            int groupId = JsonConfigHelper.FindKeyByGroupName(command);
-                            SaveGroupIdToFile(groupId.ToString());
-
-                            var taskItem = JumpListItem.CreateWithArguments("EditGroupWindow --id=" + groupId, "Edit this Group");
-                            System.Diagnostics.Debug.WriteLine($"Created jump list item for group '{command}' with ID: {groupId}");
-                            return taskItem;
-                        }
-                        catch (Exception ex) {
-                            System.Diagnostics.Debug.WriteLine($"Failed to find group ID for '{command}': {ex.Message}");
-                        }
-                    }
-                }
-
-                // Fallback
-                System.Diagnostics.Debug.WriteLine("Using fallback jump list item");
-                return JumpListItem.CreateWithArguments("EditGroupWindow --id=0", "Edit Group");
-            }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Failed to create edit jump list item: {ex.Message}");
-                return JumpListItem.CreateWithArguments("EditGroupWindow --id=0", "Edit Group");
-            }
-        }
-
-        private static JumpListItem CreateLaunchAllJumpListItem() {
-            try {
-                string[] cmdArgs = Environment.GetCommandLineArgs();
-                System.Diagnostics.Debug.WriteLine($"CreateLaunchAllJumpListItem called with args: {string.Join(", ", cmdArgs)}");
-
-                if (cmdArgs.Length > 1) {
-                    string command = cmdArgs[1];
-
-                    if (command == "EditGroupWindow") {
-                        int groupId = ExtractIdFromCommandLine(cmdArgs);
-                        var taskItem = JumpListItem.CreateWithArguments($"LaunchAll --groupId={groupId}", "Launch All");
-                        System.Diagnostics.Debug.WriteLine($"Created LaunchAll item for EditGroupWindow with ID: {groupId}");
-                        return taskItem;
-                    }
-                    else if (command != "LaunchAll") {
-                        // This is a group name like "CH"
-                        string groupName = command;
-                        var taskItem = JumpListItem.CreateWithArguments($"LaunchAll --groupName=\"{groupName}\"", "Launch All");
-                        System.Diagnostics.Debug.WriteLine($"Created LaunchAll item for group: '{groupName}'");
-                        return taskItem;
-                    }
-                }
-
-                // Fallback
-                System.Diagnostics.Debug.WriteLine("Using fallback LaunchAll item");
-                return JumpListItem.CreateWithArguments("LaunchAll", "Launch All");
-            }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Failed to create launch all jump list item: {ex.Message}");
-                return JumpListItem.CreateWithArguments("LaunchAll", "Launch All");
-            }
-        }
-
-        private static string ExtractGroupNameFromCommandLine(string[] args) {
-            try {
-                foreach (string arg in args) {
-                    if (arg.StartsWith("--groupName=")) {
-                        return arg.Substring(12).Trim('"');
-                    }
-                    else if (arg.StartsWith("--groupId=")) {
-                        if (int.TryParse(arg.Substring(10), out int groupId)) {
-                            return JsonConfigHelper.FindGroupNameByKey(groupId);
-                        }
-                    }
-                }
-                return string.Empty;
-            }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Error extracting group name: {ex.Message}");
-                return string.Empty;
-            }
-        }
-        private static void SaveGroupIdToFile(string groupId) {
-            try {
+        private static void SaveGroupIdToFile(string groupId)
+        {
+            try
+            {
                 string filePath = Path.Combine(AppPaths.BaseDataPath, "lastEdit");
-                Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? "");
+                Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? AppPaths.BaseDataPath);
                 File.WriteAllText(filePath, groupId);
             }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Failed to save group ID: {ex.Message}");
-            }
-        }
-        private static int ExtractIdFromCommandLine(string[] args) {
-            try {
-                foreach (string arg in args) {
-                    if (arg.StartsWith("--id=")) {
-                        if (int.TryParse(arg.Substring(5), out int id)) {
-                            return id;
-                        }
-                    }
-                }
-                return JsonConfigHelper.GetNextGroupId();
-            }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Error extracting ID: {ex.Message}");
-                return JsonConfigHelper.GetNextGroupId();
-            }
-        }
-        private static bool HasSilentFlag(string[] args) {
-            try {
-                foreach (string arg in args) {
-                    if (arg.Equals("--silent", StringComparison.OrdinalIgnoreCase)) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Error checking silent flag: {ex.Message}");
-                return false;
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to save group ID: {ex.Message}");
             }
         }
 
-      
+        private static bool HasSilentFlag(string[] args)
+        {
+            return args.Any(arg => string.Equals(arg, "--silent", StringComparison.OrdinalIgnoreCase));
+        }
 
-      
-      
+        private static void ShowActivationError(string message)
+        {
+            Debug.WriteLine(message);
+            MessageBox(IntPtr.Zero, message, "AppGroup", 0x00000030u);
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = false)]
+        private static extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);
     }
-
 }
