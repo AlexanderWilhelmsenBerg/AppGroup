@@ -14,11 +14,11 @@ using System.Drawing;
 namespace AppGroup {
     public class WindowHelper {
         private readonly Window _window;
-        private AppWindow _appWindow;
+        private AppWindow _appWindow = null!;
         private IntPtr _hWnd;
-        private SystemBackdropConfiguration _configurationSource;
-        private MicaBackdrop _micaBackdrop;
-        private DesktopAcrylicController _acrylicController;
+        private SystemBackdropConfiguration? _configurationSource;
+        private MicaBackdrop? _micaBackdrop;
+        private DesktopAcrylicController? _acrylicController;
         private bool _micaEnabled;
         private bool _extendContent;
         private bool _canMaximize;
