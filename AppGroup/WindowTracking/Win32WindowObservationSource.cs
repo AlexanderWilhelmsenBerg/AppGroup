@@ -18,6 +18,8 @@ internal sealed class Win32WindowObservationSource : IWindowObservationSource {
     private const int DwmwaCloaked = 14;
     private const uint WineventOutOfContext = 0x0000;
     private const int ObjidWindow = 0;
+    private const uint WmQuit = 0x0012;
+    private const uint PmNoRemove = 0x0000;
 
     private const uint EventSystemForeground = 0x0003;
     private const uint EventSystemMinimizeStart = 0x0016;
@@ -230,21 +232,27 @@ internal sealed class Win32WindowObservationSource : IWindowObservationSource {
         private readonly Action<WindowObservationEvent> _sink;
         private readonly WinEventDelegate _callback;
         private readonly List<IntPtr> _hooks = new();
+        private readonly ManualResetEventSlim _ready = new(false);
+        private readonly Thread _thread;
+        private Exception? _startupException;
+        private uint _hookThreadId;
         private int _disposed;
 
         public WinEventSubscription(Action<WindowObservationEvent> sink) {
             _sink = sink ?? throw new ArgumentNullException(nameof(sink));
             _callback = WinEventCallback;
+            _thread = new Thread(HookThreadMain) {
+                IsBackground = true,
+                Name = "AppGroup WindowTracker WinEvent"
+            };
 
-            try {
-                AddHook(EventSystemForeground, EventSystemForeground);
-                AddHook(EventSystemMinimizeStart, EventSystemMinimizeEnd);
-                AddHook(EventObjectCreate, EventObjectHide);
-                AddHook(EventObjectNameChange, EventObjectNameChange);
-            }
-            catch {
-                Dispose();
-                throw;
+            _thread.Start();
+            _ready.Wait();
+
+            if (_startupException is not null) {
+                _thread.Join();
+                _ready.Dispose();
+                throw new InvalidOperationException("Unable to initialize WinEvent hooks.", _startupException);
             }
         }
 
@@ -253,12 +261,52 @@ internal sealed class Win32WindowObservationSource : IWindowObservationSource {
                 return;
             }
 
-            foreach (IntPtr hook in _hooks) {
-                if (hook != IntPtr.Zero) {
-                    UnhookWinEvent(hook);
+            uint threadId = Volatile.Read(ref _hookThreadId);
+            if (threadId != 0) {
+                PostThreadMessage(threadId, WmQuit, IntPtr.Zero, IntPtr.Zero);
+            }
+
+            if (Thread.CurrentThread.ManagedThreadId != _thread.ManagedThreadId) {
+                _thread.Join();
+            }
+
+            _ready.Dispose();
+        }
+
+        private void HookThreadMain() {
+            _hookThreadId = GetCurrentThreadId();
+            PeekMessage(out _, IntPtr.Zero, 0, 0, PmNoRemove);
+
+            try {
+                AddHook(EventSystemForeground, EventSystemForeground);
+                AddHook(EventSystemMinimizeStart, EventSystemMinimizeEnd);
+                AddHook(EventObjectCreate, EventObjectHide);
+                AddHook(EventObjectNameChange, EventObjectNameChange);
+                _ready.Set();
+
+                while (true) {
+                    int result = GetMessage(out Message message, IntPtr.Zero, 0, 0);
+                    if (result <= 0) {
+                        break;
+                    }
+
+                    TranslateMessage(ref message);
+                    DispatchMessage(ref message);
                 }
             }
-            _hooks.Clear();
+            catch (Exception ex) {
+                _startupException = ex;
+                _ready.Set();
+            }
+            finally {
+                foreach (IntPtr hook in _hooks) {
+                    if (hook != IntPtr.Zero) {
+                        UnhookWinEvent(hook);
+                    }
+                }
+                _hooks.Clear();
+                _ready.Set();
+            }
         }
 
         private void AddHook(uint eventMin, uint eventMax) {
@@ -337,6 +385,23 @@ internal sealed class Win32WindowObservationSource : IWindowObservationSource {
         public int Bottom;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Message {
+        public IntPtr WindowHandle;
+        public uint MessageId;
+        public UIntPtr WParam;
+        public IntPtr LParam;
+        public uint Time;
+        public Point Point;
+        public uint Private;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool EnumWindows(EnumWindowsDelegate callback, IntPtr parameter);
@@ -401,6 +466,37 @@ internal sealed class Win32WindowObservationSource : IWindowObservationSource {
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnhookWinEvent(IntPtr hook);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PeekMessage(
+        out Message message,
+        IntPtr windowHandle,
+        uint messageFilterMin,
+        uint messageFilterMax,
+        uint removeMessage);
+
+    [DllImport("user32.dll")]
+    private static extern int GetMessage(
+        out Message message,
+        IntPtr windowHandle,
+        uint messageFilterMin,
+        uint messageFilterMax);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TranslateMessage(ref Message message);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr DispatchMessage(ref Message message);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostThreadMessage(
+        uint threadId,
+        uint message,
+        IntPtr wParam,
+        IntPtr lParam);
+
     [DllImport("dwmapi.dll")]
     private static extern int DwmGetWindowAttribute(
         IntPtr windowHandle,
@@ -428,4 +524,7 @@ internal sealed class Win32WindowObservationSource : IWindowObservationSource {
         IntPtr processHandle,
         ref uint applicationUserModelIdLength,
         StringBuilder? applicationUserModelId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 }
