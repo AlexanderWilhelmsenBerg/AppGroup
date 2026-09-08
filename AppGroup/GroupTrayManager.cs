@@ -1,288 +1,291 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 
-namespace AppGroup {
-    public static class GroupTrayManager {
+namespace AppGroup
+{
+    public static class GroupTrayManager
+    {
         private static int WM_TASKBARCREATED;
         private static IntPtr _hwnd = IntPtr.Zero;
-        private static NativeMethods.WndProcDelegate _wndProcDelegate;
+        private static NativeMethods.WndProcDelegate? _wndProcDelegate;
         private static IntPtr _hMenu = IntPtr.Zero;
-        private static int _menuActiveGroupId = -1;
+        private static int _menuActiveGroupSlot = -1;
 
-        // groupId → (hIcon, groupName)
-        private static readonly Dictionary<int, (IntPtr hIcon, string groupName)> _icons
-            = new Dictionary<int, (IntPtr, string)>();
-
+        private static readonly Dictionary<int, TrayGroup> _icons = new();
         private const uint WM_GROUPTRAY = NativeMethods.WM_TRAYICON + 1;
         private const string WndClassName = "AppGroupGroupTrayWndClass";
-        private static uint GroupIdToUid(int groupId) => (uint)(0x1000 + groupId);
-        // ── Public API ────────────────────────────────────────────────────────
+        private static uint GroupSlotToUid(int groupSlot) => (uint)(0x1000 + groupSlot);
 
-        /// <summary>Call once after LoadGroupsAsync completes.</summary>
-        /// 
-        public static void SyncFromJson() {
-            try {
-                string jsonFilePath = JsonConfigHelper.GetDefaultConfigPath();
-                if (!File.Exists(jsonFilePath)) return;
-
-                string jsonContent = File.ReadAllText(jsonFilePath);
-                JsonNode jsonObject = JsonNode.Parse(jsonContent ?? "{}") ?? new JsonObject();
-                var groupDictionary = jsonObject.AsObject();
-
+        public static void SyncFromJson()
+        {
+            try
+            {
+                JsonObject root = JsonConfigHelper.ReadCurrentRoot();
                 EnsureWindow();
-                var incoming = new HashSet<int>();
+                HashSet<int> incoming = new();
 
-                foreach (var property in groupDictionary) {
-                    if (!int.TryParse(property.Key, out int groupId)) continue;
-                    string groupName = property.Value?["groupName"]?.GetValue<string>();
-                    string groupIcon = property.Value?["groupIcon"]?.GetValue<string>();
-                    bool showOnTray = property.Value?["showOnTray"]?.GetValue<bool>() ?? false;
+                foreach ((string slotText, JsonObject group) in AppGroupConfigSchema.EnumerateGroups(root))
+                {
+                    if (!int.TryParse(slotText, out int slot))
+                    {
+                        continue;
+                    }
 
-                    if (string.IsNullOrWhiteSpace(groupName)) continue;
-                    if (!showOnTray) continue;
+                    string stableId = group["id"]?.GetValue<string>() ?? string.Empty;
+                    string groupName = group["groupName"]?.GetValue<string>() ?? string.Empty;
+                    string groupIcon = group["groupIcon"]?.GetValue<string>() ?? string.Empty;
+                    bool showOnTray = group["showOnTray"]?.GetValue<bool>() ?? false;
+                    if (!showOnTray || string.IsNullOrWhiteSpace(stableId) || string.IsNullOrWhiteSpace(groupName))
+                    {
+                        continue;
+                    }
 
-                    incoming.Add(groupId);
-                    var g = new GroupItem {
-                        GroupId = groupId,
-                        GroupName = groupName,
-                        GroupIcon = groupIcon,
-                        PathIcons = new System.Collections.Generic.List<string>()
-                    };
-                    AddGroup(g);
+                    incoming.Add(slot);
+                    AddGroup(new TrayGroup(slot, stableId, groupName, groupIcon));
                 }
 
-                foreach (var id in new System.Collections.Generic.List<int>(_icons.Keys))
-                    if (!incoming.Contains(id))
-                        RemoveGroup(id);
+                foreach (int slot in new List<int>(_icons.Keys))
+                {
+                    if (!incoming.Contains(slot))
+                    {
+                        RemoveGroup(slot);
+                    }
+                }
             }
-            catch (Exception ex) {
+            catch (Exception ex)
+            {
                 Debug.WriteLine($"GroupTrayManager.SyncFromJson failed: {ex.Message}");
             }
         }
-       
 
-        public static void Cleanup() {
+        public static void Cleanup()
+        {
             RemoveAll();
-            if (_hMenu != IntPtr.Zero) {
+            if (_hMenu != IntPtr.Zero)
+            {
                 NativeMethods.DestroyMenu(_hMenu);
                 _hMenu = IntPtr.Zero;
             }
         }
 
-        // ── Window ────────────────────────────────────────────────────────────
-
-        private static void EnsureWindow() {
-            if (_hwnd != IntPtr.Zero) return;
+        private static void EnsureWindow()
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                return;
+            }
 
             _wndProcDelegate = WndProc;
-
-            var wc = new NativeMethods.WNDCLASSEX {
+            NativeMethods.WNDCLASSEX windowClass = new()
+            {
                 cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEX>(),
                 lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProcDelegate),
                 hInstance = NativeMethods.GetModuleHandle(null),
                 hCursor = NativeMethods.LoadCursor(IntPtr.Zero, 32512u),
                 lpszClassName = WndClassName
             };
-            NativeMethods.RegisterClassEx(ref wc);
+            NativeMethods.RegisterClassEx(ref windowClass);
             WM_TASKBARCREATED = NativeMethods.RegisterWindowMessage("TaskbarCreated");
-            _hwnd = NativeMethods.CreateWindowEx(0, WndClassName, "AppGroup GroupTray",
-                0, 0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero,
+            _hwnd = NativeMethods.CreateWindowEx(
+                0, WndClassName, "AppGroup GroupTray", 0,
+                0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero,
                 NativeMethods.GetModuleHandle(null), IntPtr.Zero);
         }
 
-        // ── Per-group icon ────────────────────────────────────────────────────
-
-        private static void AddGroup(GroupItem g) {
-            if (string.IsNullOrWhiteSpace(g.GroupName)) return;
-
-            string iconPath = !string.IsNullOrWhiteSpace(g.GroupIcon)
-                ? g.GroupIcon
-                : g.PathIcons?.Count > 0 ? g.PathIcons[0] : null;
-
-            bool isExisting = _icons.ContainsKey(g.GroupId);
-
-            // Destroy old icon handle before re-adding
-            if (_icons.TryGetValue(g.GroupId, out var old)) {
-                if (old.hIcon != IntPtr.Zero)
-                    NativeMethods.DestroyIcon(old.hIcon);
-                _icons.Remove(g.GroupId);
+        private static void AddGroup(TrayGroup group)
+        {
+            bool existing = _icons.ContainsKey(group.Slot);
+            if (_icons.TryGetValue(group.Slot, out TrayGroup? old))
+            {
+                if (old.IconHandle != IntPtr.Zero)
+                {
+                    NativeMethods.DestroyIcon(old.IconHandle);
+                }
+                _icons.Remove(group.Slot);
             }
 
-            IntPtr hIcon = LoadGroupIcon(iconPath);
-            var nid = BuildNid(GroupIdToUid(g.GroupId), hIcon, g.GroupName);
-
-            bool ok = NativeMethods.Shell_NotifyIcon(isExisting ? NativeMethods.NIM_MODIFY : NativeMethods.NIM_ADD, ref nid);
-
-            // Fallback: if NIM_MODIFY fails try NIM_ADD, if NIM_ADD fails try NIM_MODIFY
-            if (!ok) {
-                ok = NativeMethods.Shell_NotifyIcon(isExisting ? NativeMethods.NIM_ADD : NativeMethods.NIM_MODIFY, ref nid);
+            IntPtr iconHandle = LoadGroupIcon(group.IconPath);
+            NativeMethods.NOTIFYICONDATA data = BuildNid(GroupSlotToUid(group.Slot), iconHandle, group.DisplayName);
+            bool ok = NativeMethods.Shell_NotifyIcon(existing ? NativeMethods.NIM_MODIFY : NativeMethods.NIM_ADD, ref data);
+            if (!ok)
+            {
+                ok = NativeMethods.Shell_NotifyIcon(existing ? NativeMethods.NIM_ADD : NativeMethods.NIM_MODIFY, ref data);
             }
-
-            if (!ok) {
-                Debug.WriteLine($"GroupTrayManager: failed to add/modify icon for group {g.GroupId}");
-                if (hIcon != IntPtr.Zero) NativeMethods.DestroyIcon(hIcon);
+            if (!ok)
+            {
+                if (iconHandle != IntPtr.Zero)
+                {
+                    NativeMethods.DestroyIcon(iconHandle);
+                }
                 return;
             }
 
-            _icons[g.GroupId] = (hIcon, g.GroupName);
+            _icons[group.Slot] = group with { IconHandle = iconHandle };
         }
-        private static void RemoveGroup(int groupId) {
-            var nid = new NativeMethods.NOTIFYICONDATA {
+
+        private static void RemoveGroup(int slot)
+        {
+            NativeMethods.NOTIFYICONDATA data = new()
+            {
                 cbSize = Marshal.SizeOf<NativeMethods.NOTIFYICONDATA>(),
                 hWnd = _hwnd,
-                uID = GroupIdToUid(groupId)
+                uID = GroupSlotToUid(slot)
             };
-            NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_DELETE, ref nid);
+            NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_DELETE, ref data);
 
-            if (_icons.TryGetValue(groupId, out var entry)) {
-                if (entry.hIcon != IntPtr.Zero)
-                    NativeMethods.DestroyIcon(entry.hIcon);
-                _icons.Remove(groupId);
+            if (_icons.TryGetValue(slot, out TrayGroup? entry))
+            {
+                if (entry.IconHandle != IntPtr.Zero)
+                {
+                    NativeMethods.DestroyIcon(entry.IconHandle);
+                }
+                _icons.Remove(slot);
             }
         }
 
-        private static void RemoveAll() {
-            foreach (var id in new List<int>(_icons.Keys))
-                RemoveGroup(id);
+        private static void RemoveAll()
+        {
+            foreach (int slot in new List<int>(_icons.Keys))
+            {
+                RemoveGroup(slot);
+            }
         }
 
-        // ── Icon loading ──────────────────────────────────────────────────────
-
-        private static IntPtr LoadGroupIcon(string iconPath) {
-            if (!string.IsNullOrWhiteSpace(iconPath)) {
-                // If FindOrigIcon returned a .png/.jpg, look for sibling .ico
-                string ext = Path.GetExtension(iconPath).ToLowerInvariant();
-                if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
-                    string icoPath = Path.Combine(
-                        Path.GetDirectoryName(iconPath),
-                        Path.GetFileNameWithoutExtension(iconPath) + ".ico");
-                    if (File.Exists(icoPath))
-                        iconPath = icoPath;
+        private static IntPtr LoadGroupIcon(string iconPath)
+        {
+            if (!string.IsNullOrWhiteSpace(iconPath))
+            {
+                string extension = Path.GetExtension(iconPath).ToLowerInvariant();
+                if (extension is ".png" or ".jpg" or ".jpeg")
+                {
+                    string? directory = Path.GetDirectoryName(iconPath);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        string icoPath = Path.Combine(directory, Path.GetFileNameWithoutExtension(iconPath) + ".ico");
+                        if (File.Exists(icoPath))
+                        {
+                            iconPath = icoPath;
+                        }
+                    }
                 }
 
-                if (File.Exists(iconPath)) {
-                    IntPtr h = NativeMethods.LoadImage(IntPtr.Zero, iconPath,
+                if (File.Exists(iconPath))
+                {
+                    IntPtr handle = NativeMethods.LoadImage(IntPtr.Zero, iconPath,
                         NativeMethods.IMAGE_ICON, 16, 16, NativeMethods.LR_LOADFROMFILE);
-                    if (h != IntPtr.Zero) return h;
+                    if (handle != IntPtr.Zero)
+                    {
+                        return handle;
+                    }
                 }
             }
-            // Fallback: generic application icon
-            return NativeMethods.LoadImage(IntPtr.Zero, "#32516",
-                NativeMethods.IMAGE_ICON, 16, 16, 0);
+
+            return NativeMethods.LoadImage(IntPtr.Zero, "#32516", NativeMethods.IMAGE_ICON, 16, 16, 0);
         }
 
-        // ── Helpers ───────────────────────────────────────────────────────────
-
-        private static NativeMethods.NOTIFYICONDATA BuildNid(uint uid, IntPtr hIcon, string tip) =>
-            new NativeMethods.NOTIFYICONDATA {
+        private static NativeMethods.NOTIFYICONDATA BuildNid(uint uid, IntPtr iconHandle, string tip) =>
+            new()
+            {
                 cbSize = Marshal.SizeOf<NativeMethods.NOTIFYICONDATA>(),
                 hWnd = _hwnd,
                 uID = uid,
                 uFlags = NativeMethods.NIF_MESSAGE | NativeMethods.NIF_ICON | NativeMethods.NIF_TIP,
                 uCallbackMessage = WM_GROUPTRAY,
-                hIcon = hIcon,
+                hIcon = iconHandle,
                 szTip = tip.Length > 127 ? tip[..127] : tip
             };
 
-        // ── WndProc ───────────────────────────────────────────────────────────
-
-        private static IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
-            if ((int)msg == WM_TASKBARCREATED) {
-                // Force re-add all icons
-                var snapshot = new Dictionary<int, (IntPtr hIcon, string groupName)>(_icons);
-                _icons.Clear();
-                foreach (var kvp in snapshot) {
-                    if (kvp.Value.hIcon != IntPtr.Zero)
-                        NativeMethods.DestroyIcon(kvp.Value.hIcon);
+        private static IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            if ((int)msg == WM_TASKBARCREATED)
+            {
+                foreach (TrayGroup group in _icons.Values)
+                {
+                    if (group.IconHandle != IntPtr.Zero)
+                    {
+                        NativeMethods.DestroyIcon(group.IconHandle);
+                    }
                 }
-                SyncFromJson(); // rebuilds everything via NIM_ADD
+                _icons.Clear();
+                SyncFromJson();
                 return IntPtr.Zero;
             }
-            if (msg == WM_GROUPTRAY) {
-                int groupId = (int)(wParam.ToInt32() - 0x1000);
-                int mouseMsg = lParam.ToInt32();
 
-                // Left click / double-click → launch group
-                if (mouseMsg == 0x0202 || mouseMsg == 0x0203) {
-                    if (_icons.TryGetValue(groupId, out var entry))
-                        LaunchGroup(entry.groupName);
+            if (msg == WM_GROUPTRAY)
+            {
+                int slot = wParam.ToInt32() - 0x1000;
+                int mouseMessage = lParam.ToInt32();
+                if ((mouseMessage == 0x0202 || mouseMessage == 0x0203) && _icons.TryGetValue(slot, out TrayGroup? group))
+                {
+                    Launch(JsonConfigHelper.BuildGroupActivationArguments(group.StableId));
                 }
 
-                // Right-click → context menu
-                if (mouseMsg == 0x0205) {
-                    _menuActiveGroupId = groupId;
+                if (mouseMessage == 0x0205)
+                {
+                    _menuActiveGroupSlot = slot;
                     ShowContextMenu();
                 }
-
                 return IntPtr.Zero;
             }
 
             return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
         }
 
-        // ── Context menu ──────────────────────────────────────────────────────
-
-        private static void ShowContextMenu() {
-            if (_hMenu != IntPtr.Zero) {
+        private static void ShowContextMenu()
+        {
+            if (_hMenu != IntPtr.Zero)
+            {
                 NativeMethods.DestroyMenu(_hMenu);
-                _hMenu = IntPtr.Zero;
             }
-
             _hMenu = NativeMethods.CreatePopupMenu();
             NativeMethods.AppendMenu(_hMenu, 0, 1, "Edit this Group");
             NativeMethods.AppendMenu(_hMenu, 0, 2, "Launch All");
 
-            NativeMethods.GetCursorPos(out NativeMethods.POINT pt);
+            NativeMethods.GetCursorPos(out NativeMethods.POINT point);
             NativeMethods.SetForegroundWindow(_hwnd);
-
             uint result = NativeMethods.TrackPopupMenu(
                 _hMenu,
                 NativeMethods.TPM_RETURNCMD | NativeMethods.TPM_RIGHTBUTTON,
-                pt.X, pt.Y, 0, _hwnd, IntPtr.Zero);
-
+                point.X, point.Y, 0, _hwnd, IntPtr.Zero);
             NativeMethods.PostMessage(_hwnd, NativeMethods.WM_NULL, IntPtr.Zero, IntPtr.Zero);
 
-            if (!_icons.TryGetValue(_menuActiveGroupId, out var e)) return;
-
-            if (result == 1) EditGroup(e.groupName);
-            if (result == 2) LaunchAll(e.groupName);
-        }
-
-        // ── Actions ───────────────────────────────────────────────────────────
-
-        private static void LaunchGroup(string groupName) { 
-            Launch($"\"{groupName}\"");
-        }
-
-        private static void EditGroup(string groupName) {
-            try {
-                int groupId = JsonConfigHelper.FindKeyByGroupName(groupName);
-                Launch($"EditGroupWindow --id={groupId}");
+            if (!_icons.TryGetValue(_menuActiveGroupSlot, out TrayGroup? group))
+            {
+                return;
             }
-            catch (Exception ex) {
-                Debug.WriteLine($"GroupTrayManager: EditGroup failed: {ex.Message}");
+
+            if (result == 1)
+            {
+                Launch(JsonConfigHelper.BuildEditActivationArguments(group.StableId));
+            }
+            else if (result == 2)
+            {
+                Launch(JsonConfigHelper.BuildLaunchAllArguments(group.StableId));
             }
         }
 
-        private static void LaunchAll(string groupName) =>
-            Launch($"LaunchAll --groupName=\"{groupName}\"");
-
-        private static void Launch(string args) {
-            try {
-                string exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AppGroup.exe");
-                Process.Start(new ProcessStartInfo {
-                    FileName = exe,
-                    Arguments = args,
+        private static void Launch(string arguments)
+        {
+            try
+            {
+                string executable = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AppGroup.exe");
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = executable,
+                    Arguments = arguments,
                     UseShellExecute = false
                 });
             }
-            catch (Exception ex) {
-                Debug.WriteLine($"GroupTrayManager: launch failed '{args}': {ex.Message}");
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"GroupTrayManager: launch failed '{arguments}': {ex.Message}");
             }
         }
+
+        private sealed record TrayGroup(int Slot, string StableId, string DisplayName, string IconPath, IntPtr IconHandle = default);
     }
 }
