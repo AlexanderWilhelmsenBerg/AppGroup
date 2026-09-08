@@ -153,6 +153,103 @@ public sealed class WindowTrackerProcessorTests {
         Assert.Null(snapshot.Title);
     }
 
+    [Fact]
+    public void Process_exit_during_refresh_removes_stale_window_safely() {
+        FakeWindowObservationSource source = new();
+        WindowTrackerState state = new();
+        WindowTrackerProcessor processor = new(source, state);
+        state.Reconcile(new[] { Snapshot(1, "Before exit") });
+
+        bool changed = processor.Process(new[] { Event(WindowObservationEventType.NameChanged, 1) });
+
+        Assert.True(changed);
+        Assert.Null(state.Get(new IntPtr(1)));
+    }
+
+    [Fact]
+    public void Access_denied_process_metadata_keeps_trackable_window() {
+        FakeWindowObservationSource source = new();
+        WindowTrackerState state = new();
+        WindowTrackerProcessor processor = new(source, state);
+        source.SetWindow(new WindowSnapshot(
+            new IntPtr(1),
+            123,
+            null,
+            null,
+            "Elevated app",
+            true,
+            false,
+            false));
+
+        Assert.True(processor.Process(new[] { Event(WindowObservationEventType.Created, 1) }));
+        WindowSnapshot snapshot = state.Get(new IntPtr(1))!;
+        Assert.Equal((uint)123, snapshot.ProcessId);
+        Assert.Null(snapshot.ExecutablePath);
+        Assert.Null(snapshot.AppUserModelId);
+        Assert.Equal("Elevated app", snapshot.Title);
+    }
+
+    [Fact]
+    public void Executable_path_unavailable_does_not_drop_other_metadata() {
+        FakeWindowObservationSource source = new();
+        WindowTrackerState state = new();
+        WindowTrackerProcessor processor = new(source, state);
+        source.SetWindow(new WindowSnapshot(
+            new IntPtr(1),
+            123,
+            null,
+            "Example.App",
+            "Example",
+            true,
+            false,
+            false));
+
+        Assert.True(processor.Process(new[] { Event(WindowObservationEventType.Created, 1) }));
+        WindowSnapshot snapshot = state.Get(new IntPtr(1))!;
+        Assert.Null(snapshot.ExecutablePath);
+        Assert.Equal("Example.App", snapshot.AppUserModelId);
+    }
+
+    [Fact]
+    public void Aumid_unavailable_does_not_drop_other_metadata() {
+        FakeWindowObservationSource source = new();
+        WindowTrackerState state = new();
+        WindowTrackerProcessor processor = new(source, state);
+        source.SetWindow(new WindowSnapshot(
+            new IntPtr(1),
+            123,
+            "C:\\Example.exe",
+            null,
+            "Example",
+            true,
+            false,
+            false));
+
+        Assert.True(processor.Process(new[] { Event(WindowObservationEventType.Created, 1) }));
+        WindowSnapshot snapshot = state.Get(new IntPtr(1))!;
+        Assert.Equal("C:\\Example.exe", snapshot.ExecutablePath);
+        Assert.Null(snapshot.AppUserModelId);
+    }
+
+    [Fact]
+    public void Title_unavailable_keeps_trackable_window() {
+        FakeWindowObservationSource source = new();
+        WindowTrackerState state = new();
+        WindowTrackerProcessor processor = new(source, state);
+        source.SetWindow(new WindowSnapshot(
+            new IntPtr(1),
+            123,
+            "C:\\Example.exe",
+            "Example.App",
+            null,
+            true,
+            false,
+            false));
+
+        Assert.True(processor.Process(new[] { Event(WindowObservationEventType.Created, 1) }));
+        Assert.Null(state.Get(new IntPtr(1))!.Title);
+    }
+
     private static WindowObservationEvent Event(WindowObservationEventType type, long handle) =>
         new(type, new IntPtr(handle));
 
