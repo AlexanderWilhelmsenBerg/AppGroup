@@ -1,4 +1,5 @@
 using AppGroup.Geometry;
+using Xunit;
 
 namespace AppGroup.Tests;
 
