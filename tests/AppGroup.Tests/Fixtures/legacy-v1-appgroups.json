@@ -1,0 +1,69 @@
+{
+  "1": {
+    "groupName": "Work",
+    "groupHeader": true,
+    "groupCol": 2,
+    "groupIcon": "C:\\Users\\Example\\AppData\\Local\\AppGroup\\Groups\\Work\\Work\\Work_regular.ico",
+    "showLabels": true,
+    "labelSize": 11,
+    "labelPosition": "Bottom",
+    "headerPosition": "Top",
+    "layout": "Default",
+    "showOnTray": true,
+    "sortMode": "Manual",
+    "futureGroupSetting": "preserve-me",
+    "path": {
+      "C:\\Program Files\\Example\\example.exe": {
+        "tooltip": "Example",
+        "args": "--profile work",
+        "icon": "C:\\icons\\example.png",
+        "futureItemSetting": 42
+      },
+      "C:\\Missing\\gone.exe": {
+        "tooltip": "Missing but retained",
+        "args": "",
+        "icon": ""
+      }
+    }
+  },
+  "2": {
+    "groupName": "Child",
+    "groupHeader": false,
+    "groupCol": 1,
+    "groupIcon": "",
+    "showLabels": false,
+    "labelSize": 12,
+    "labelPosition": "Bottom",
+    "headerPosition": "Top",
+    "layout": "Default",
+    "showOnTray": false,
+    "sortMode": "Manual",
+    "path": {
+      "C:\\Windows\\System32\\notepad.exe": {
+        "tooltip": "Notepad",
+        "args": "",
+        "icon": ""
+      }
+    }
+  },
+  "3": {
+    "groupName": "Parent",
+    "groupHeader": false,
+    "groupCol": 1,
+    "groupIcon": "",
+    "showLabels": false,
+    "labelSize": 12,
+    "labelPosition": "Bottom",
+    "headerPosition": "Top",
+    "layout": "Default",
+    "showOnTray": false,
+    "sortMode": "Manual",
+    "path": {
+      "C:\\Users\\Example\\AppData\\Local\\AppGroup\\Groups\\Child\\Child.lnk": {
+        "tooltip": "Child",
+        "args": "",
+        "icon": ""
+      }
+    }
+  }
+}
