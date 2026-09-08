@@ -38,16 +38,18 @@ Executable path uses `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` plus `Quer
 
 ## Event hooks and threading
 
-The native observation source installs four `SetWinEventHook` registrations with `WINEVENT_OUTOFCONTEXT`:
+The native observation source owns a dedicated lightweight background thread with a Win32 message loop. That thread installs four `SetWinEventHook` registrations with `WINEVENT_OUTOFCONTEXT`:
 
 1. `EVENT_SYSTEM_FOREGROUND`;
 2. `EVENT_SYSTEM_MINIMIZESTART` through `EVENT_SYSTEM_MINIMIZEEND`;
 3. `EVENT_OBJECT_CREATE` through `EVENT_OBJECT_HIDE`;
 4. `EVENT_OBJECT_NAMECHANGE`.
 
+Owning the message loop removes any dependency on the caller being a WinUI thread or otherwise pumping Windows messages. The tracker therefore does not require `PopupWindow` or a UI dispatcher to receive native events.
+
 Object events are accepted only for `OBJID_WINDOW` with `idChild == 0`. The native callback maps the event to a small `(event type, HWND)` value, enqueues it, and returns. It does not inspect processes, titles, AUMIDs, or WinUI state.
 
-A single background reader batches events for 15 ms and coalesces repeated events by HWND. Metadata refresh and state mutation therefore occur away from the native callback thread. `WindowsChanged` is raised from this tracker background context and has no WinUI thread affinity; UI consumers must marshal through their own dispatcher.
+A separate single-reader background worker batches queued events for 15 ms and coalesces repeated events by HWND. Metadata refresh and state mutation therefore occur away from the native callback/message-loop thread. `WindowsChanged` is raised from this tracker background context and has no WinUI thread affinity; UI consumers must marshal through their own dispatcher.
 
 ## Reconciliation
 
@@ -57,6 +59,6 @@ The interval is deliberately slow because WinEvent notifications are the primary
 
 ## Lifetime
 
-`WindowTracker.Start()` registers hooks before the initial enumeration so events that race startup can queue while initial state is built. Hook delegates are rooted by the subscription object. Disposal is idempotent: hooks are unregistered exactly once, callbacks ignore disposed state, the channel is completed, cancellation stops the worker and periodic timer, and `DisposeAsync()` can await both tasks to finish.
+`WindowTracker.Start()` registers hooks before the initial enumeration so events that race startup can queue while initial state is built. Hook delegates are rooted by the subscription object. Disposal is idempotent: the hook thread is asked to quit, it unregisters every WinEvent hook before exiting, callbacks ignore disposed state, the channel is completed, cancellation stops the worker and periodic timer, and `DisposeAsync()` can await the managed worker tasks to finish.
 
 The service is intentionally not wired into `App.xaml.cs`, `Program.cs`, or `PopupWindow.xaml.cs` in this slice. Resident-host ownership and UI consumption belong to later roadmap work.
