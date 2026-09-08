@@ -359,7 +359,7 @@ public static class AppGroupConfigSchema
             return 1;
         }
 
-        if (versionNode is JsonValue && versionNode.TryGetValue<int>(out int version) && version >= 1)
+        if (versionNode is JsonValue versionValue && versionValue.TryGetValue<int>(out int version) && version >= 1)
         {
             return version;
         }

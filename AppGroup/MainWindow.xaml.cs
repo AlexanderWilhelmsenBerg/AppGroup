@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Dispatching;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -506,7 +506,7 @@ namespace AppGroup {
                 JsonNode jsonObject = JsonNode.Parse(jsonContent ?? "{}") ?? new JsonObject();
                 var groupDictionary = jsonObject.AsObject();
 
-                var newJsonObject = new JsonObject();
+                var newJsonObject = new JsonObject { [AppGroupConfigSchema.VersionProperty] = AppGroupConfigSchema.CurrentVersion };
                 for (int i = 0; i < reorderedItems.Count; i++) {
                     var item = reorderedItems[i];
                     string oldKey = item.GroupId.ToString();
@@ -617,8 +617,7 @@ namespace AppGroup {
                 cts.CancelAfter(TimeSpan.FromSeconds(10));
 
                 string jsonFilePath = JsonConfigHelper.GetDefaultConfigPath();
-                if (!File.Exists(jsonFilePath))
-                    File.WriteAllText(jsonFilePath, "{}");
+                JsonConfigHelper.EnsureCurrentSchema(jsonFilePath);
 
                 string jsonContent = await File.ReadAllTextAsync(jsonFilePath, cts.Token)
                     .ConfigureAwait(false);

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -104,6 +105,24 @@ namespace AppGroup
         {
             EnsureCurrentSchema();
             return AppGroupConfigSchema.ParseCurrent(File.ReadAllText(GetDefaultConfigPath()));
+        }
+
+        public static string GetGroupsOnlyJson(string json)
+        {
+            JsonObject root = AppGroupConfigSchema.ParseCurrent(json);
+            JsonObject groups = new();
+            foreach ((string slot, JsonObject group) in AppGroupConfigSchema.EnumerateGroups(root))
+            {
+                groups[slot] = group.DeepClone();
+            }
+            return groups.ToJsonString();
+        }
+
+        public static void WriteCurrentRoot(JsonObject root)
+        {
+            root[AppGroupConfigSchema.VersionProperty] = AppGroupConfigSchema.CurrentVersion;
+            MigrationResult validated = AppGroupConfigSchema.Migrate(root.ToJsonString(IndentedJson));
+            WriteAtomically(GetDefaultConfigPath(), validated.Json);
         }
 
         public static int GetNextGroupId()
@@ -220,6 +239,102 @@ namespace AppGroup
             shortcut.IconLocation = iconPath;
             shortcut.WorkingDirectory = Path.GetDirectoryName(targetPath);
             shortcut.Save();
+        }
+
+        public static void SaveGroupToJson(
+            string filePath,
+            int groupSlot,
+            string stableGroupId,
+            string groupName,
+            bool groupHeader,
+            string groupIcon,
+            int groupCol,
+            bool showLabels,
+            int labelSize,
+            string labelPosition,
+            string headerPosition,
+            string layout,
+            bool showOnTray,
+            string sortMode,
+            IReadOnlyList<PersistedGroupItem> items)
+        {
+            EnsureCurrentSchema(filePath);
+            JsonObject root = AppGroupConfigSchema.ParseCurrent(File.ReadAllText(filePath));
+            string slot = groupSlot.ToString(CultureInfo.InvariantCulture);
+            JsonObject group = root[slot] as JsonObject ?? AppGroupConfigSchema.CreateGroup(groupName);
+
+            string existingId = group["id"]?.GetValue<string>() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(existingId) &&
+                !string.IsNullOrWhiteSpace(stableGroupId) &&
+                !string.Equals(existingId, stableGroupId, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Group slot {groupSlot} already belongs to stable ID '{existingId}'.");
+            }
+
+            string identity = !string.IsNullOrWhiteSpace(existingId)
+                ? existingId
+                : !string.IsNullOrWhiteSpace(stableGroupId)
+                    ? stableGroupId
+                    : AppGroupConfigSchema.NewStableId();
+
+            group["id"] = identity;
+            group["groupName"] = groupName;
+            group["groupHeader"] = groupHeader;
+            group["groupCol"] = groupCol;
+            group["groupIcon"] = groupIcon;
+            group["showLabels"] = showLabels;
+            group["labelSize"] = labelSize;
+            group["labelPosition"] = labelPosition;
+            group["headerPosition"] = headerPosition;
+            group["layout"] = layout;
+            group["showOnTray"] = showOnTray;
+            group["sortMode"] = sortMode;
+
+            Dictionary<string, JsonObject> existingItems = AppGroupConfigSchema.GetItems(group)
+                .OfType<JsonObject>()
+                .Where(item => !string.IsNullOrWhiteSpace(item["id"]?.GetValue<string>()))
+                .ToDictionary(item => item["id"]!.GetValue<string>(), item => (JsonObject)item.DeepClone(), StringComparer.OrdinalIgnoreCase);
+
+            HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+            JsonArray canonicalItems = new();
+            foreach (PersistedGroupItem persisted in items)
+            {
+                string itemId = string.IsNullOrWhiteSpace(persisted.Id) ? AppGroupConfigSchema.NewStableId() : persisted.Id;
+                if (!seen.Add(itemId))
+                {
+                    throw new InvalidOperationException($"Duplicate item ID '{itemId}' in group '{identity}'.");
+                }
+
+                JsonObject item = existingItems.TryGetValue(itemId, out JsonObject? existingItem)
+                    ? existingItem
+                    : AppGroupConfigSchema.CreateItem(persisted.Target);
+                item["id"] = itemId;
+                item["target"] = persisted.Target;
+                item["displayName"] = persisted.DisplayName;
+                item["tooltip"] = persisted.DisplayName;
+                item["arguments"] = persisted.Arguments;
+                item["args"] = persisted.Arguments;
+                item["workingDirectory"] = persisted.WorkingDirectory;
+                item["icon"] = persisted.Icon;
+                item["runAsAdministrator"] = persisted.RunAsAdministrator;
+                item["appIdentity"] = persisted.AppIdentity;
+
+                string? subgroupId = persisted.SubgroupId;
+                if (string.IsNullOrWhiteSpace(subgroupId))
+                {
+                    subgroupId = ResolveSubgroupIdForTarget(root, persisted.Target);
+                }
+                string type = !string.IsNullOrWhiteSpace(subgroupId) ? "subgroup" : persisted.Type;
+                item["type"] = string.IsNullOrWhiteSpace(type) ? "launch" : type;
+                item["subgroupId"] = subgroupId;
+                canonicalItems.Add(item);
+            }
+
+            group["items"] = canonicalItems;
+            AppGroupConfigSchema.RebuildCompatibilityPath(group);
+            root[slot] = group;
+            root[AppGroupConfigSchema.VersionProperty] = AppGroupConfigSchema.CurrentVersion;
+            WriteAtomically(filePath, root.ToJsonString(IndentedJson));
         }
 
         public static void AddGroupToJson(

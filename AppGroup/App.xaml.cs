@@ -1,4 +1,4 @@
-﻿
+
 
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -92,7 +92,8 @@ namespace AppGroup {
                         // Send group name first, then show
                         IntPtr popupHWnd = popupWindow?.GetWindowHandle() ?? IntPtr.Zero;
                         if (popupHWnd != IntPtr.Zero) {
-                            NativeMethods.SendString(popupHWnd, $"{command}|{Program.InitialClickPos.X},{Program.InitialClickPos.Y}");
+                            string groupSelector = Program.InitialStableGroupId ?? command;
+                            NativeMethods.SendString(popupHWnd, $"{groupSelector}|{Program.InitialClickPos.X},{Program.InitialClickPos.Y}");
                             NativeMethods.ForceForegroundWindow(popupHWnd);
                         }
                     }
