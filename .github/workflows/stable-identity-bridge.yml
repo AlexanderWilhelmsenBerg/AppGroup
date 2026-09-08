@@ -24,7 +24,7 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Apply narrow identity bridge edits
-        run: python .\tools\apply_stable_identity_bridge.py
+        run: python .\tools\apply_stable_identity_bridge_v2.py
 
       - name: Commit bridge edits
         shell: pwsh
