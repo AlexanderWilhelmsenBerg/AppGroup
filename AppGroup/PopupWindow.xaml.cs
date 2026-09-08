@@ -67,7 +67,7 @@ namespace AppGroup {
                 }
             }
         }
-        public event PropertyChangedEventHandler PropertyChanged;
+        public event PropertyChangedEventHandler? PropertyChanged;
         public bool IsSubgroup { get; set; }
         public string SubgroupName { get; set; }
       
@@ -132,7 +132,7 @@ namespace AppGroup {
         private NativeMethods.SubclassProc _subclassProc;
         private const int SUBCLASS_ID = 1;
         private readonly Dictionary<string, PopupWindow> _openSubPopups = new Dictionary<string, PopupWindow>();
-        private PopupWindow _parentPopup = null;
+        private PopupWindow? _parentPopup = null;
         private Storyboard _entranceStoryboard;
         private bool _entranceStarted = false;  
         private bool _wasLaunchedFromTaskbar = false;
@@ -276,7 +276,7 @@ namespace AppGroup {
             return new SizeInt32(workArea.Width * 2, workArea.Height * 2);
         }
 
-        private void AnimateWindowSlideUp(IntPtr hWnd, bool isSubPopup = false, Action onComplete = null, NativeMethods.POINT? cursorOverride = null) {
+        private void AnimateWindowSlideUp(IntPtr hWnd, bool isSubPopup = false, Action? onComplete = null, NativeMethods.POINT? cursorOverride = null) {
             NativeMethods.GetWindowRect(hWnd, out NativeMethods.RECT rect);
             int finalX = rect.left;
             int finalY = rect.top;
@@ -429,7 +429,7 @@ namespace AppGroup {
             int currentStep = 0;
             var cts = _windowCts;
 
-            System.Threading.Timer timer = null;
+            System.Threading.Timer? timer = null;
             timer = new System.Threading.Timer(_ => {
                 if (cts.IsCancellationRequested) { onComplete?.Invoke(); timer?.Dispose(); return; }
                 currentStep++;
