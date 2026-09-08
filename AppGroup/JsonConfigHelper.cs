@@ -1,7 +1,8 @@
-﻿using IWshRuntimeLibrary;
+using IWshRuntimeLibrary;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -13,457 +14,574 @@ namespace AppGroup
 {
     public class JsonConfigHelper
     {
-     
-        public static string FindGroupNameByKey(int key) {
-            try {
-                string json = File.ReadAllText(GetDefaultConfigPath());
-                var jsonDocument = JsonDocument.Parse(json);
+        private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
 
-                string keyString = key.ToString();
-                if (jsonDocument.RootElement.TryGetProperty(keyString, out JsonElement groupElement)) {
-                    if (groupElement.TryGetProperty("groupName", out JsonElement groupNameElement)) {
-                        return groupNameElement.GetString() ?? string.Empty;
-                    }
-                }
-
-                throw new Exception($"No group found for key '{key}'");
-            }
-            catch (Exception ex) {
-                System.Diagnostics.Debug.WriteLine($"Error finding group name by key {key}: {ex.Message}");
-                return string.Empty;
-            }
+        public static string GetDefaultConfigPath(string fileName = "appgroups.json")
+        {
+            string appDataPath = AppPaths.BaseDataPath;
+            Directory.CreateDirectory(appDataPath);
+            return Path.Combine(appDataPath, fileName);
         }
-        public static int FindKeyByGroupName(string groupName) {
-            string json = File.ReadAllText(GetDefaultConfigPath());
-            var jsonDocument = JsonDocument.Parse(json);
 
-            foreach (var property in jsonDocument.RootElement.EnumerateObject()) {
-                if (property.Value.TryGetProperty("groupName", out JsonElement groupNameElement)) {
-                    if (groupNameElement.GetString() == groupName) {
-                        if (int.TryParse(property.Name, out int key)) {
-                            return key;
-                        }
-                    }
-                }
+        public static void EnsureCurrentSchema()
+        {
+            EnsureCurrentSchema(GetDefaultConfigPath());
+        }
+
+        public static void EnsureCurrentSchema(string filePath)
+        {
+            string? directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
             }
 
-            throw new Exception($"No key found for groupName '{groupName}'");
+            if (!File.Exists(filePath))
+            {
+                WriteAtomically(filePath, AppGroupConfigSchema.CreateEmpty().ToJsonString(IndentedJson));
+                return;
+            }
+
+            string original = File.ReadAllText(filePath);
+            MigrationResult migration = AppGroupConfigSchema.Migrate(original);
+            if (!migration.Changed)
+            {
+                return;
+            }
+
+            string backupPath = filePath + ".pre-schema2.bak";
+            if (!File.Exists(backupPath))
+            {
+                File.Copy(filePath, backupPath, overwrite: false);
+            }
+
+            WriteAtomically(filePath, migration.Json);
         }
 
         public static string ReadJsonFromFile(string filePath)
         {
             try
             {
-                if (!System.IO.File.Exists(filePath))
+                if (!File.Exists(filePath))
                 {
                     throw new FileNotFoundException($"JSON configuration file not found at: {filePath}");
                 }
 
-                return System.IO.File.ReadAllText(filePath);
+                if (IsDefaultConfigPath(filePath))
+                {
+                    EnsureCurrentSchema(filePath);
+                }
+                return File.ReadAllText(filePath);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not ConfigMigrationException)
             {
                 throw new Exception($"Error reading JSON file: {ex.Message}", ex);
             }
         }
-        public static int GetNextGroupId() {
-            string jsonFilePath = GetDefaultConfigPath();
-            string jsonContent = System.IO.File.Exists(jsonFilePath) ? System.IO.File.ReadAllText(jsonFilePath) : "{}";
-            JsonNode jsonObject = JsonNode.Parse(jsonContent) ?? new JsonObject();
 
-            if (jsonObject.AsObject().Any()) {
-                int maxGroupId = jsonObject.AsObject()
-                    .Select(property => int.Parse(property.Key))
-                    .Max();
-                return maxGroupId + 1;
-            }
-            else {
-                return 1;
-            }
-        }
         public static async Task<string> ReadJsonFromFileAsync(string filePath)
         {
             try
             {
-                if (!System.IO.File.Exists(filePath))
+                if (!File.Exists(filePath))
                 {
                     throw new FileNotFoundException($"JSON configuration file not found at: {filePath}");
                 }
 
-                return await System.IO.File.ReadAllTextAsync(filePath);
+                if (IsDefaultConfigPath(filePath))
+                {
+                    EnsureCurrentSchema(filePath);
+                }
+                return await File.ReadAllTextAsync(filePath);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not ConfigMigrationException)
             {
                 throw new Exception($"Error reading JSON file: {ex.Message}", ex);
             }
         }
 
-        public static string GetDefaultConfigPath(string fileName = "appgroups.json") {
-            string appDataPath = AppPaths.BaseDataPath;
-            if (!Directory.Exists(appDataPath))
-                Directory.CreateDirectory(appDataPath);
-            return Path.Combine(appDataPath, fileName);
+        public static JsonObject ReadCurrentRoot()
+        {
+            EnsureCurrentSchema();
+            return AppGroupConfigSchema.ParseCurrent(File.ReadAllText(GetDefaultConfigPath()));
         }
 
-        public static void AddGroupToJson(string filePath, int groupId, string groupName, bool groupHeader, string groupIcon, int groupCol, bool showLabels, int labelSize, string labelPosition, string headerPosition, string layout, bool showOnTray, string sortMode, Dictionary<string, (string tooltip, string args, string icon)> paths) {
-        //public static void AddGroupToJson(string filePath, int groupId, string groupName, bool groupHeader, string groupIcon, int groupCol, bool showLabels, int labelSize, string labelPosition, string headerPosition, string layout, bool showOnTray, Dictionary<string, (string tooltip, string args, string icon)> paths) {
-            try {
-                string directory = Path.GetDirectoryName(filePath);
-                if (!Directory.Exists(directory)) {
-                    Directory.CreateDirectory(directory);
-                }
-                if (!System.IO.File.Exists(filePath)) {
-                    System.IO.File.WriteAllText(filePath, "{}");
-                }
-                string jsonContent = ReadJsonFromFile(filePath);
-                JsonNode jsonObject = JsonNode.Parse(jsonContent) ?? new JsonObject();
-                JsonObject jsonPaths = new JsonObject();
-                foreach (var path in paths) {
-                    JsonObject pathDetails = new JsonObject {
-                { "tooltip", path.Value.tooltip },
-                { "args", path.Value.args },
-                { "icon", path.Value.icon }
-            };
-                    jsonPaths[path.Key] = pathDetails;
-                }
-                JsonObject newGroup = new JsonObject {
-            { "groupName", groupName },
-            { "groupHeader", groupHeader },
-            { "groupCol", groupCol },
-            { "groupIcon", groupIcon },
-            { "showLabels", showLabels },
-            { "labelSize", labelSize },
-            { "labelPosition", labelPosition },
-            { "headerPosition", headerPosition },
-            { "layout", layout },
-            { "path", jsonPaths },
-              { "showOnTray", showOnTray },
-                { "sortMode", sortMode },
-        };
-                jsonObject[groupId.ToString()] = newGroup;
-                System.IO.File.WriteAllText(filePath, JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions { WriteIndented = true }));
+        public static int GetNextGroupId()
+        {
+            JsonObject root = ReadCurrentRoot();
+            return AppGroupConfigSchema.EnumerateGroups(root)
+                .Select(pair => int.Parse(pair.Key, CultureInfo.InvariantCulture))
+                .DefaultIfEmpty(0)
+                .Max() + 1;
+        }
+
+        public static string FindGroupNameByKey(int key)
+        {
+            JsonObject root = ReadCurrentRoot();
+            if (root[key.ToString(CultureInfo.InvariantCulture)] is JsonObject group)
+            {
+                return group["groupName"]?.GetValue<string>() ?? string.Empty;
             }
-            catch (Exception ex) {
+
+            return string.Empty;
+        }
+
+        public static string FindStableIdByKey(int key)
+        {
+            JsonObject root = ReadCurrentRoot();
+            if (root[key.ToString(CultureInfo.InvariantCulture)] is JsonObject group)
+            {
+                return group["id"]?.GetValue<string>() ?? string.Empty;
+            }
+
+            return string.Empty;
+        }
+
+        public static int FindKeyByStableGroupId(string stableGroupId)
+        {
+            JsonObject root = ReadCurrentRoot();
+            GroupReference reference = AppGroupConfigSchema.FindGroupByStableId(root, stableGroupId)
+                ?? throw new KeyNotFoundException($"No group found for stable ID '{stableGroupId}'.");
+            return int.Parse(reference.Slot, CultureInfo.InvariantCulture);
+        }
+
+        public static int FindKeyByGroupName(string groupName)
+        {
+            JsonObject root = ReadCurrentRoot();
+            GroupResolution resolution = AppGroupConfigSchema.ResolveGroup(root, groupName, allowLegacyName: true);
+            return resolution.Status switch
+            {
+                GroupResolutionStatus.Found => int.Parse(resolution.Group!.Slot, CultureInfo.InvariantCulture),
+                GroupResolutionStatus.Ambiguous => throw new AmbiguousMatchException(
+                    $"More than one group is named '{groupName}'. Use a stable group ID instead."),
+                _ => throw new KeyNotFoundException($"No group found for groupName '{groupName}'.")
+            };
+        }
+
+        public static GroupResolution ResolveGroup(string selector, bool allowLegacyName = true)
+        {
+            return AppGroupConfigSchema.ResolveGroup(ReadCurrentRoot(), selector, allowLegacyName);
+        }
+
+        public static string ResolveStableGroupId(string selector, bool allowLegacyName = true)
+        {
+            GroupResolution resolution = ResolveGroup(selector, allowLegacyName);
+            return resolution.Status switch
+            {
+                GroupResolutionStatus.Found => resolution.Group!.StableId,
+                GroupResolutionStatus.Ambiguous => throw new AmbiguousMatchException(
+                    $"More than one group is named '{selector}'. Use a stable group ID instead."),
+                _ => throw new KeyNotFoundException($"No group found for '{selector}'.")
+            };
+        }
+
+        public static string GetGroupFolderPath(string stableGroupId)
+        {
+            return Path.Combine(AppPaths.BaseDataPath, "Groups", stableGroupId);
+        }
+
+        public static string GetGroupShortcutPath(string stableGroupId)
+        {
+            return Path.Combine(GetGroupFolderPath(stableGroupId), "AppGroup.lnk");
+        }
+
+        public static string BuildGroupActivationArguments(string stableGroupId)
+        {
+            return $"--group \"{stableGroupId}\"";
+        }
+
+        public static string BuildEditActivationArguments(string stableGroupId)
+        {
+            return $"EditGroupWindow --group \"{stableGroupId}\"";
+        }
+
+        public static string BuildLaunchAllArguments(string stableGroupId)
+        {
+            return $"LaunchAll --group \"{stableGroupId}\"";
+        }
+
+        public static void CreateOrUpdateGroupShortcut(string stableGroupId, string groupName, string iconPath)
+        {
+            string shortcutPath = GetGroupShortcutPath(stableGroupId);
+            string? directory = Path.GetDirectoryName(shortcutPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string targetPath = Process.GetCurrentProcess().MainModule?.FileName
+                ?? Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "AppGroup.exe");
+
+            WshShell shell = new();
+            IWshShortcut shortcut = (IWshShortcut)shell.CreateShortcut(shortcutPath);
+            shortcut.TargetPath = targetPath;
+            shortcut.Arguments = BuildGroupActivationArguments(stableGroupId);
+            shortcut.Description = $"{stableGroupId} - AppGroup Shortcut";
+            shortcut.IconLocation = iconPath;
+            shortcut.WorkingDirectory = Path.GetDirectoryName(targetPath);
+            shortcut.Save();
+        }
+
+        public static void AddGroupToJson(
+            string filePath,
+            int groupId,
+            string groupName,
+            bool groupHeader,
+            string groupIcon,
+            int groupCol,
+            bool showLabels,
+            int labelSize,
+            string labelPosition,
+            string headerPosition,
+            string layout,
+            bool showOnTray,
+            string sortMode,
+            Dictionary<string, (string tooltip, string args, string icon)> paths)
+        {
+            try
+            {
+                EnsureCurrentSchema(filePath);
+                JsonObject root = AppGroupConfigSchema.ParseCurrent(File.ReadAllText(filePath));
+                string slot = groupId.ToString(CultureInfo.InvariantCulture);
+                JsonObject group = root[slot] as JsonObject ?? AppGroupConfigSchema.CreateGroup(groupName);
+
+                group["groupName"] = groupName;
+                group["groupHeader"] = groupHeader;
+                group["groupCol"] = groupCol;
+                group["groupIcon"] = groupIcon;
+                group["showLabels"] = showLabels;
+                group["labelSize"] = labelSize;
+                group["labelPosition"] = labelPosition;
+                group["headerPosition"] = headerPosition;
+                group["layout"] = layout;
+                group["showOnTray"] = showOnTray;
+                group["sortMode"] = sortMode;
+
+                SynchronizeItemsFromLegacyUi(root, group, paths);
+                root[slot] = group;
+                root[AppGroupConfigSchema.VersionProperty] = AppGroupConfigSchema.CurrentVersion;
+                WriteAtomically(filePath, root.ToJsonString(IndentedJson));
+            }
+            catch (Exception ex)
+            {
                 throw new Exception($"Error adding group to JSON file: {ex.Message}", ex);
             }
         }
-        public static void DeleteGroupFromJson(string filePath, int groupId) {
-            try {
-                string jsonContent = ReadJsonFromFile(filePath);
-                JsonNode jsonObject = JsonNode.Parse(jsonContent) ?? new JsonObject();
 
-                if (!jsonObject.AsObject().ContainsKey(groupId.ToString())) {
-                    throw new KeyNotFoundException($"Group ID {groupId} not found in JSON file.");
-                }
+        public static void DeleteGroupFromJson(string filePath, int groupId)
+        {
+            try
+            {
+                EnsureCurrentSchema(filePath);
+                JsonObject root = AppGroupConfigSchema.ParseCurrent(File.ReadAllText(filePath));
+                string slot = groupId.ToString(CultureInfo.InvariantCulture);
+                JsonObject group = root[slot] as JsonObject
+                    ?? throw new KeyNotFoundException($"Group slot {groupId} not found in JSON file.");
+                string stableId = group["id"]?.GetValue<string>() ?? string.Empty;
 
-                string groupName = jsonObject[groupId.ToString()]?["groupName"]?.GetValue<string>();
+                root.Remove(slot);
+                WriteAtomically(filePath, root.ToJsonString(IndentedJson));
 
-                if (string.IsNullOrEmpty(groupName)) {
-                    throw new InvalidOperationException($"Could not retrieve group name for Group ID {groupId}.");
-                }
-
-                jsonObject.AsObject().Remove(groupId.ToString());
-
-                System.IO.File.WriteAllText(filePath, JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions { WriteIndented = true }));
-
-                //string exeDirectory = Path.GetDirectoryName(Environment.ProcessPath);
-
-                //string localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                //string appDataPath = Path.Combine(localAppDataPath, "AppGroup");
-                //string groupsFolder = Path.Combine(appDataPath, "Groups");
-                string groupsFolder = Path.Combine(AppPaths.BaseDataPath, "Groups");
-                //string groupsFolder = Path.Combine(exeDirectory, "Groups");
-                string groupFolderPath = Path.Combine(groupsFolder, groupName);
-
-                if (Directory.Exists(groupFolderPath)) {
-                    Directory.Delete(groupFolderPath, true); 
+                if (!string.IsNullOrWhiteSpace(stableId))
+                {
+                    string stableFolder = GetGroupFolderPath(stableId);
+                    if (Directory.Exists(stableFolder))
+                    {
+                        Directory.Delete(stableFolder, recursive: true);
+                    }
                 }
             }
-            catch (Exception ex) {
+            catch (Exception ex)
+            {
                 throw new Exception($"Error deleting group: {ex.Message}", ex);
             }
         }
 
-      
-        public static void DuplicateGroupInJson(string filePath, int groupId) {
-            try {
-                string jsonContent = ReadJsonFromFile(filePath);
-                JsonNode jsonObject = JsonNode.Parse(jsonContent) ?? new JsonObject();
+        public static void DuplicateGroupInJson(string filePath, int groupId)
+        {
+            try
+            {
+                EnsureCurrentSchema(filePath);
+                JsonObject root = AppGroupConfigSchema.ParseCurrent(File.ReadAllText(filePath));
+                string slot = groupId.ToString(CultureInfo.InvariantCulture);
+                JsonObject source = root[slot] as JsonObject
+                    ?? throw new KeyNotFoundException($"Group slot {groupId} not found in JSON file.");
+                JsonObject duplicate = (JsonObject)source.DeepClone();
 
-                if (jsonObject.AsObject().ContainsKey(groupId.ToString())) {
-                    JsonNode groupToDuplicate = jsonObject[groupId.ToString()];
-                    int newGroupId = GetNextGroupId();
-
-                    JsonObject duplicatedGroup = groupToDuplicate.AsObject().DeepClone() as JsonObject;
-                    string originalGroupName = duplicatedGroup["groupName"]?.GetValue<string>() ?? "Group";
-                    string newGroupName = GetUniqueGroupName(jsonObject, $"{originalGroupName} - Copy");
-
-                    duplicatedGroup["groupName"] = newGroupName;
-
-                    string originalGroupIcon = duplicatedGroup["groupIcon"]?.GetValue<string>() ?? string.Empty;
-                    if (!string.IsNullOrEmpty(originalGroupIcon)) {
-                        string newGroupIcon = originalGroupIcon.Replace(originalGroupName, newGroupName);
-                        duplicatedGroup["groupIcon"] = newGroupIcon;
-                    }
-
-                    jsonObject[newGroupId.ToString()] = duplicatedGroup;
-
-                    System.IO.File.WriteAllText(filePath, JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions { WriteIndented = true }));
-
-                    //string exeDirectory = Path.GetDirectoryName(Environment.ProcessPath);
-                    //string localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    //string appDataPath = Path.Combine(localAppDataPath, "AppGroup");
-                    //string groupsFolder = Path.Combine(appDataPath, "Groups");
-                    string groupsFolder = Path.Combine(AppPaths.BaseDataPath, "Groups");
-                    //string groupsFolder = Path.Combine(exeDirectory, "Groups");
-                    string originalGroupFolderPath = Path.Combine(groupsFolder, originalGroupName);
-                    string newGroupFolderPath = Path.Combine(groupsFolder, newGroupName);
-
-                    if (Directory.Exists(originalGroupFolderPath)) {
-                        CopyDirectory(originalGroupFolderPath, newGroupFolderPath, originalGroupName, newGroupName);
+                string sourceName = source["groupName"]?.GetValue<string>() ?? "Group";
+                duplicate["groupName"] = sourceName + " - Copy";
+                duplicate["id"] = AppGroupConfigSchema.NewStableId();
+                if (duplicate["items"] is JsonArray items)
+                {
+                    foreach (JsonObject item in items.OfType<JsonObject>())
+                    {
+                        item["id"] = AppGroupConfigSchema.NewStableId();
                     }
                 }
-                else {
-                    throw new KeyNotFoundException($"Group ID {groupId} not found in JSON file.");
-                }
+                AppGroupConfigSchema.RebuildCompatibilityPath(duplicate);
+                AppGroupConfigSchema.AddGroup(root, duplicate);
+                WriteAtomically(filePath, root.ToJsonString(IndentedJson));
             }
-            catch (Exception ex) {
+            catch (Exception ex)
+            {
                 throw new Exception($"Error duplicating group in JSON file: {ex.Message}", ex);
             }
         }
 
-        private static string GetUniqueGroupName(JsonNode jsonObject, string baseName) {
-            string uniqueName = baseName;
-            int counter = 2;
+        public static async Task LaunchAll(string groupSelector)
+        {
+            try
+            {
+                JsonObject root = ReadCurrentRoot();
+                GroupResolution resolution = AppGroupConfigSchema.ResolveGroup(root, groupSelector, allowLegacyName: true);
+                if (resolution.Status != GroupResolutionStatus.Found)
+                {
+                    Debug.WriteLine(resolution.Status == GroupResolutionStatus.Ambiguous
+                        ? $"LaunchAll refused ambiguous legacy group name '{groupSelector}'."
+                        : $"LaunchAll could not resolve group '{groupSelector}'.");
+                    return;
+                }
 
-            while (true) {
-                bool nameExists = false;
-                foreach (var group in jsonObject.AsObject()) {
-                    if (group.Value["groupName"]?.GetValue<string>() == uniqueName) {
-                        nameExists = true;
-                        break;
+                JsonObject group = root[resolution.Group!.Slot]!.AsObject();
+                JsonArray items = AppGroupConfigSchema.GetItems(group);
+                List<Task> launches = new();
+                foreach (JsonObject item in items.OfType<JsonObject>())
+                {
+                    if (string.Equals(item["type"]?.GetValue<string>(), "subgroup", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
                     }
-                }
 
-                if (!nameExists) {
-                    break;
-                }
-
-                uniqueName = $"{baseName}({counter++})";
-            }
-
-            return uniqueName;
-        }
-
-        public static async Task LaunchAll(string groupName) {
-            try {
-                string filePath = GetDefaultConfigPath();
-                string jsonContent = await ReadJsonFromFileAsync(filePath);
-                JsonNode jsonObject = JsonNode.Parse(jsonContent) ?? new JsonObject();
-                foreach (var group in jsonObject.AsObject()) {
-                    if (group.Value["groupName"]?.GetValue<string>() == groupName) {
-                        JsonObject paths = group.Value["path"]?.AsObject();
-                        if (paths != null) {
-                            var allTasks = new List<Task>();
-                            foreach (var pathEntry in paths) {
-                                string path = pathEntry.Key;
-
-                                // Skip sub-popup shortcuts
-                                if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) {
-                                    try {
-                                        IWshShell shell = new WshShell();
-                                        IWshShortcut shortcut = (IWshShortcut)shell.CreateShortcut(path);
-                                        if (shortcut.Description.EndsWith("- AppGroup Shortcut", StringComparison.OrdinalIgnoreCase))
-                                            continue;
-                                    }
-                                    catch { }
-                                }
-
-                                string args = pathEntry.Value?["args"]?.GetValue<string>() ?? string.Empty;
-                                allTasks.Add(Task.Run(() =>
-                                {
-
-                                    // CMD wrapper
-                                    try {
-                                        ProcessStartInfo psi = new ProcessStartInfo {
-                                            FileName = "cmd.exe",
-                                            Arguments = $"/c start \"\" \"{path}\" {args}",
-                                            UseShellExecute = true,
-                                            WindowStyle = ProcessWindowStyle.Hidden
-                                        };
-                                        Process process = Process.Start(psi);
-                                        process?.Close();
-                                    }
-                                    catch (Exception ex) {
-                                        Debug.WriteLine($"Failed to launch {path}: {ex.Message}");
-                                    }
-                                }));
-                            }
-                            await Task.WhenAll(allTasks);
-                        }
-                        break;
+                    string target = item["target"]?.GetValue<string>() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(target))
+                    {
+                        continue;
                     }
+                    string arguments = item["arguments"]?.GetValue<string>() ?? string.Empty;
+                    launches.Add(Task.Run(() => LaunchLegacyCompatible(target, arguments)));
                 }
+                await Task.WhenAll(launches);
             }
-            catch (Exception ex) {
-                Debug.WriteLine($"Error launching all paths under group '{groupName}': {ex.Message}");
-            }
-        }
-        private static void CopyDirectory(string sourceDir, string destinationDir, string originalGroupName, string newGroupName) {
-            Directory.CreateDirectory(destinationDir);
-
-            foreach (string file in Directory.GetFiles(sourceDir)) {
-                string fileName = Path.GetFileName(file);
-                string destFile = Path.Combine(destinationDir, fileName);
-
-                if (fileName.Contains(originalGroupName)) {
-                    string newFileName = fileName.Replace(originalGroupName, newGroupName);
-                    destFile = Path.Combine(destinationDir, newFileName);
-                }
-
-                System.IO.File.Copy(file, destFile);
-
-                FileAttributes attributes = System.IO.File.GetAttributes(file);
-                System.IO.File.SetAttributes(destFile, attributes);
-
-                if (Path.GetExtension(file).Equals(".lnk", StringComparison.OrdinalIgnoreCase)) {
-                    UpdateShortcutTarget(destFile, originalGroupName, newGroupName);
-                }
-            }
-
-            foreach (string subDir in Directory.GetDirectories(sourceDir)) {
-                string subDirName = Path.GetFileName(subDir);
-
-                if (subDirName.Contains(originalGroupName)) {
-                    subDirName = subDirName.Replace(originalGroupName, newGroupName);
-                }
-
-                string newSubDir = Path.Combine(destinationDir, subDirName);
-                CopyDirectory(subDir, newSubDir, originalGroupName, newGroupName);
-
-                FileAttributes attributes = new DirectoryInfo(subDir).Attributes;
-                new DirectoryInfo(newSubDir).Attributes = attributes;
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error launching all paths under group '{groupSelector}': {ex.Message}");
             }
         }
 
-        public static void UpdateShortcutIcon(string shortcutPath, string originalGroupName, string newGroupName) {
-            try {
-                WshShell wshShell = new WshShell();
-                IWshShortcut shortcut = (IWshShortcut)wshShell.CreateShortcut(shortcutPath);
+        public static bool GroupExistsInJson(string groupName)
+        {
+            JsonObject root = ReadCurrentRoot();
+            return AppGroupConfigSchema.EnumerateGroups(root).Any(pair =>
+                string.Equals(pair.Value["groupName"]?.GetValue<string>(), groupName, StringComparison.OrdinalIgnoreCase));
+        }
 
-                // Get the old icon location
-                string oldIconLocation = shortcut.IconLocation;
+        public static bool StableGroupIdExists(string stableGroupId)
+        {
+            return AppGroupConfigSchema.FindGroupByStableId(ReadCurrentRoot(), stableGroupId) is not null;
+        }
 
-                // Update the icon location
-                string newIconLocation = oldIconLocation.Replace(originalGroupName, newGroupName);
-                shortcut.IconLocation = newIconLocation;
+        public static bool GroupIdExists(int groupId)
+        {
+            JsonObject root = ReadCurrentRoot();
+            return root.ContainsKey(groupId.ToString(CultureInfo.InvariantCulture));
+        }
 
+        public static void OpenGroupFolder(int groupId)
+        {
+            try
+            {
+                JsonObject root = ReadCurrentRoot();
+                string slot = groupId.ToString(CultureInfo.InvariantCulture);
+                if (root[slot] is not JsonObject group)
+                {
+                    return;
+                }
+
+                string stableId = group["id"]?.GetValue<string>() ?? string.Empty;
+                string groupName = group["groupName"]?.GetValue<string>() ?? string.Empty;
+                string stableFolder = GetGroupFolderPath(stableId);
+                string legacyFolder = Path.Combine(AppPaths.BaseDataPath, "Groups", groupName);
+                string folder = Directory.Exists(stableFolder) ? stableFolder : legacyFolder;
+                if (Directory.Exists(folder))
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = folder,
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error opening group folder: {ex.Message}");
+            }
+        }
+
+        public static void UpdateShortcutIcon(string shortcutPath, string originalGroupName, string newGroupName)
+        {
+            try
+            {
+                WshShell shell = new();
+                IWshShortcut shortcut = (IWshShortcut)shell.CreateShortcut(shortcutPath);
+                shortcut.IconLocation = shortcut.IconLocation.Replace(originalGroupName, newGroupName, StringComparison.OrdinalIgnoreCase);
                 shortcut.Save();
             }
-            catch (Exception ex) {
+            catch (Exception ex)
+            {
                 throw new Exception($"Error updating shortcut icon: {ex.Message}", ex);
             }
         }
 
+        private static void SynchronizeItemsFromLegacyUi(
+            JsonObject root,
+            JsonObject group,
+            Dictionary<string, (string tooltip, string args, string icon)> paths)
+        {
+            JsonArray existingItems = AppGroupConfigSchema.GetItems(group);
+            List<JsonObject> oldItems = existingItems.OfType<JsonObject>().Select(item => (JsonObject)item.DeepClone()).ToList();
+            HashSet<string> consumedIds = new(StringComparer.OrdinalIgnoreCase);
+            JsonArray updated = new();
 
+            foreach ((string target, (string tooltip, string args, string icon) details) in paths)
+            {
+                JsonObject? item = oldItems.FirstOrDefault(candidate =>
+                    !consumedIds.Contains(candidate["id"]?.GetValue<string>() ?? string.Empty) &&
+                    string.Equals(candidate["target"]?.GetValue<string>(), target, StringComparison.OrdinalIgnoreCase));
 
-        private static void UpdateShortcutTarget(string shortcutPath, string originalGroupName, string newGroupName) {
-            try {
-                WshShell wshShell = new WshShell();
-                IWshShortcut shortcut = (IWshShortcut)wshShell.CreateShortcut(shortcutPath);
+                item ??= AppGroupConfigSchema.CreateItem(target);
+                string itemId = item["id"]?.GetValue<string>() ?? AppGroupConfigSchema.NewStableId();
+                item["id"] = itemId;
+                item["target"] = target;
+                item["displayName"] = details.tooltip ?? string.Empty;
+                item["arguments"] = details.args ?? string.Empty;
+                item["icon"] = details.icon ?? string.Empty;
+                item["workingDirectory"] ??= string.Empty;
+                item["runAsAdministrator"] ??= false;
+                item["appIdentity"] ??= null;
 
-                string targetPath = shortcut.TargetPath.Replace(originalGroupName, newGroupName);
-                shortcut.TargetPath = targetPath;
-                shortcut.Arguments = $"\"{newGroupName}\"";
-                shortcut.Description = $"{newGroupName} - AppGroup Shortcut";
+                string? subgroupId = ResolveSubgroupIdForTarget(root, target);
+                if (!string.IsNullOrWhiteSpace(subgroupId))
+                {
+                    item["type"] = "subgroup";
+                    item["subgroupId"] = subgroupId;
+                }
+                else
+                {
+                    item["type"] ??= "launch";
+                    item["subgroupId"] ??= null;
+                }
 
-                // Update the icon location if necessary
-                string iconPath = shortcut.IconLocation.Replace(originalGroupName, newGroupName);
-                shortcut.IconLocation = iconPath;
-
-                shortcut.Save();
+                consumedIds.Add(itemId);
+                updated.Add(item);
             }
-            catch (Exception ex) {
-                throw new Exception($"Error updating shortcut target: {ex.Message}", ex);
+
+            HashSet<string> uiTargets = paths.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (JsonObject oldItem in oldItems)
+            {
+                string id = oldItem["id"]?.GetValue<string>() ?? string.Empty;
+                if (consumedIds.Contains(id))
+                {
+                    continue;
+                }
+
+                string target = oldItem["target"]?.GetValue<string>() ?? string.Empty;
+                bool duplicateTarget = uiTargets.Contains(target);
+                bool targetMissing = !string.IsNullOrWhiteSpace(target) && !File.Exists(target) && !Directory.Exists(target);
+                if (duplicateTarget || targetMissing || string.Equals(oldItem["type"]?.GetValue<string>(), "subgroup", StringComparison.OrdinalIgnoreCase))
+                {
+                    updated.Add(oldItem);
+                }
+            }
+
+            group["items"] = updated;
+            AppGroupConfigSchema.RebuildCompatibilityPath(group);
+        }
+
+        private static string? ResolveSubgroupIdForTarget(JsonObject root, string target)
+        {
+            foreach ((_, JsonObject candidate) in AppGroupConfigSchema.EnumerateGroups(root))
+            {
+                string id = candidate["id"]?.GetValue<string>() ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(id) && PathsEqual(GetGroupShortcutPath(id), target))
+                {
+                    return id;
+                }
+            }
+
+            if (!target.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            string candidateName = Path.GetFileNameWithoutExtension(target);
+            GroupResolution legacy = AppGroupConfigSchema.ResolveGroup(root, candidateName, allowLegacyName: true);
+            return legacy.Status == GroupResolutionStatus.Found ? legacy.Group!.StableId : null;
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            try
+            {
+                return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
             }
         }
-        public static bool GroupExistsInJson(string groupName) {
-            string jsonPath = GetDefaultConfigPath();
-            if (File.Exists(jsonPath)) {
-                string jsonContent = File.ReadAllText(jsonPath);
-                using (JsonDocument document = JsonDocument.Parse(jsonContent)) {
-                    JsonElement root = document.RootElement;
 
-                    foreach (JsonProperty property in root.EnumerateObject()) {
-                        if (property.Value.TryGetProperty("groupName", out JsonElement groupNameElement) &&
-                            groupNameElement.GetString() == groupName) {
-                            return true;
-                        }
-                    }
-                }
+        private static void LaunchLegacyCompatible(string target, string arguments)
+        {
+            try
+            {
+                ProcessStartInfo startInfo = new()
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c start \"\" \"{target}\" {arguments}",
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                Process.Start(startInfo)?.Close();
             }
-            return false;
-        }
-        public static bool GroupIdExists(int groupId) {
-            string jsonPath = GetDefaultConfigPath();
-
-            if (File.Exists(jsonPath)) {
-                string jsonContent = File.ReadAllText(jsonPath);
-                using (JsonDocument document = JsonDocument.Parse(jsonContent)) {
-                    JsonElement root = document.RootElement;
-
-                    foreach (JsonProperty property in root.EnumerateObject()) {
-                        if (property.Value.TryGetProperty("groupId", out JsonElement groupIdElement) &&
-                            groupIdElement.GetInt32() == groupId) {
-                            return true;
-                        }
-                    }
-                }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to launch {target}: {ex.Message}");
             }
-            return false;
         }
 
+        private static bool IsDefaultConfigPath(string path)
+        {
+            return string.Equals(Path.GetFullPath(path), Path.GetFullPath(GetDefaultConfigPath()), StringComparison.OrdinalIgnoreCase);
+        }
 
-        public static void OpenGroupFolder(int groupId) {
-            try {
-                string filePath = GetDefaultConfigPath();
-                string jsonContent = ReadJsonFromFile(filePath);
-                JsonNode jsonObject = JsonNode.Parse(jsonContent) ?? new JsonObject();
+        private static void WriteAtomically(string filePath, string content)
+        {
+            string? directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
 
-                if (jsonObject.AsObject().ContainsKey(groupId.ToString())) {
-                    string groupName = jsonObject[groupId.ToString()]?["groupName"]?.GetValue<string>();
-
-                    if (!string.IsNullOrEmpty(groupName)) {
-                        //string exeDirectory = Path.GetDirectoryName(Environment.ProcessPath);
-                        //string localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                        //string appDataPath = Path.Combine(localAppDataPath, "AppGroup");
-                        //string groupsFolder = Path.Combine(appDataPath, "Groups");
-                        string groupsFolder = Path.Combine(AppPaths.BaseDataPath, "Groups");
-                        string groupFolderPath = Path.Combine(groupsFolder, groupName);
-                        //string groupsFolder = Path.Combine(exeDirectory, "Groups");
-                        //string groupFolderPath = Path.Combine(groupsFolder, groupName);
-
-                        if (Directory.Exists(groupFolderPath)) {
-                            Process.Start(new ProcessStartInfo {
-                                FileName = "explorer.exe",
-                                Arguments = groupFolderPath,
-                                UseShellExecute = true
-                            });
-                        }
-                        else {
-                            Debug.WriteLine($"The folder for group '{groupName}' does not exist.");
-                        }
-                    }
-                    else {
-                        Debug.WriteLine("Group name not found in the configuration.");
-                    }
+            string tempPath = filePath + ".tmp." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+            try
+            {
+                File.WriteAllText(tempPath, content);
+                if (File.Exists(filePath))
+                {
+                    File.Move(tempPath, filePath, overwrite: true);
                 }
-                else {
-                    Debug.WriteLine($"Group ID {groupId} not found in the configuration.");
+                else
+                {
+                    File.Move(tempPath, filePath);
                 }
             }
-            catch (Exception ex) {
-                Debug.WriteLine($"Error opening group folder: {ex.Message}");
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
             }
         }
     }
