@@ -216,9 +216,11 @@ public sealed class WindowTracker : IDisposable, IAsyncDisposable {
     }
 
     public void Start() {
-        ThrowIfDisposed();
+        bool initialChanged;
 
         lock (_lifecycleGate) {
+            ThrowIfDisposed();
+
             if (_started) {
                 return;
             }
@@ -227,21 +229,21 @@ public sealed class WindowTracker : IDisposable, IAsyncDisposable {
             try {
                 subscription = _source.Subscribe(EnqueueFromNativeCallback);
                 IReadOnlyCollection<WindowSnapshot> initial = _source.EnumerateWindows(_state.CopyMap());
-                bool changed = _state.Reconcile(initial);
+                initialChanged = _state.Reconcile(initial);
 
                 _subscription = subscription;
                 _started = true;
                 _workerTask = Task.Run(ProcessEventsAsync);
                 _reconciliationTask = Task.Run(ReconciliationLoopAsync);
-
-                if (changed) {
-                    PublishChanged();
-                }
             }
             catch {
                 subscription?.Dispose();
                 throw;
             }
+        }
+
+        if (initialChanged && Volatile.Read(ref _disposeStarted) == 0) {
+            PublishChanged();
         }
     }
 
@@ -294,10 +296,14 @@ public sealed class WindowTracker : IDisposable, IAsyncDisposable {
 
                 bool changed;
                 lock (_lifecycleGate) {
+                    if (Volatile.Read(ref _disposeStarted) != 0) {
+                        break;
+                    }
+
                     changed = _processor.Process(batch);
                 }
 
-                if (changed) {
+                if (changed && Volatile.Read(ref _disposeStarted) == 0) {
                     PublishChanged();
                 }
             }
