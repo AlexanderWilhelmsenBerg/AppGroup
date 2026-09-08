@@ -57,7 +57,7 @@ namespace AppGroup {
         public Dictionary<string, string> Tooltips { get; set; } = new Dictionary<string, string>();
         public Dictionary<string, string> Args { get; set; } = new Dictionary<string, string>();
         public Dictionary<string, string> CustomIcons { get; set; } = new Dictionary<string, string>();
-        public event PropertyChangedEventHandler PropertyChanged;
+        public event PropertyChangedEventHandler? PropertyChanged;
         protected void OnPropertyChanged(string propertyName) =>
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
