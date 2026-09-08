@@ -1,0 +1,53 @@
+name: One-shot PopupWindow nullability patch
+
+on:
+  push:
+    branches: [pr0-1-zero-warning]
+    paths:
+      - .github/workflows/one-shot-popup-nullability.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: pr0-1-zero-warning
+
+      - name: Apply exact nullable-annotation fixes
+        shell: pwsh
+        run: |
+          $path = '.\AppGroup\PopupWindow.xaml.cs'
+          $text = [System.IO.File]::ReadAllText($path)
+
+          $replacements = @(
+            @('public event PropertyChangedEventHandler PropertyChanged;', 'public event PropertyChangedEventHandler? PropertyChanged;'),
+            @('private PopupWindow _parentPopup = null;', 'private PopupWindow? _parentPopup = null;'),
+            @('Action onComplete = null, NativeMethods.POINT? cursorOverride = null', 'Action? onComplete = null, NativeMethods.POINT? cursorOverride = null'),
+            @('System.Threading.Timer timer = null;', 'System.Threading.Timer? timer = null;')
+          )
+
+          foreach ($pair in $replacements) {
+            $old = $pair[0]
+            $new = $pair[1]
+            $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+            if ($count -ne 1) {
+              throw "Expected exactly one occurrence of '$old', found $count."
+            }
+            $text = $text.Replace($old, $new)
+          }
+
+          [System.IO.File]::WriteAllText($path, $text, [System.Text.UTF8Encoding]::new($true))
+
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AppGroup/PopupWindow.xaml.cs
+          git diff --cached --check
+          git commit -m 'Fix remaining PopupWindow nullability warnings'
+          git push origin HEAD:pr0-1-zero-warning
