@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Windows x64 build and tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream release tags
+        shell: pwsh
+        run: git fetch --force https://github.com/iandiv/AppGroup.git 'refs/tags/*:refs/tags/*'
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore AppGroup
+        run: dotnet restore .\AppGroup\AppGroup.csproj -p:Platform=x64 -r win-x64
+
+      - name: Build AppGroup
+        run: dotnet build .\AppGroup\AppGroup.csproj --configuration Release --no-restore -p:Platform=x64 -r win-x64
+
+      - name: Verify AppGroup version
+        shell: pwsh
+        run: |
+          $tag = (git describe --tags --abbrev=0).Trim()
+          if (-not $tag) {
+            throw 'No upstream release tag is available to validate the build version.'
+          }
+
+          $expected = $tag -replace '^[vV]', ''
+          $exe = Get-ChildItem .\AppGroup\bin -Recurse -Filter AppGroup.exe |
+            Where-Object { $_.FullName -match '\\Release\\' -and $_.FullName -match '\\win-x64\\' } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw 'Unable to locate the Release win-x64 AppGroup.exe build output.'
+          }
+
+          $actual = $exe.VersionInfo.FileVersion
+          Write-Host "Nearest upstream release tag: $tag"
+          Write-Host "Built AppGroup file version: $actual"
+
+          if (-not $actual.StartsWith("$expected.")) {
+            throw "Built AppGroup version '$actual' does not match upstream release line '$expected'."
+          }
+
+      - name: Stage smoke-test build
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem .\AppGroup\bin -Recurse -Filter AppGroup.exe |
+            Where-Object { $_.FullName -match '\\Release\\' -and $_.FullName -match '\\win-x64\\' } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw 'Unable to locate the Release win-x64 AppGroup.exe build output.'
+          }
+
+          $tag = (git describe --tags --abbrev=0).Trim()
+          $artifactDir = '.\artifacts\AppGroup-win-x64'
+          New-Item -ItemType Directory -Force $artifactDir | Out-Null
+          Copy-Item (Join-Path $exe.Directory.FullName '*') $artifactDir -Recurse -Force
+          "Commit: $env:GITHUB_SHA" | Set-Content (Join-Path $artifactDir 'BUILD_INFO.txt')
+          "Source: GitHub Actions Release win-x64 build" | Add-Content (Join-Path $artifactDir 'BUILD_INFO.txt')
+          "Nearest upstream release tag: $tag" | Add-Content (Join-Path $artifactDir 'BUILD_INFO.txt')
+          "File version: $($exe.VersionInfo.FileVersion)" | Add-Content (Join-Path $artifactDir 'BUILD_INFO.txt')
+
+      - name: Restore tests
+        run: dotnet restore .\tests\AppGroup.Tests\AppGroup.Tests.csproj
+
+      - name: Run tests
+        run: dotnet test .\tests\AppGroup.Tests\AppGroup.Tests.csproj --configuration Release --no-restore --verbosity normal
+
+      - name: Upload Windows x64 smoke-test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppGroup-win-x64
+          path: .\artifacts\AppGroup-win-x64
+          if-no-files-found: error
+          retention-days: 14
