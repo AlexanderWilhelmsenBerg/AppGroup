@@ -15,4 +15,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../AppGroup/Geometry/*.cs" Link="Geometry/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
