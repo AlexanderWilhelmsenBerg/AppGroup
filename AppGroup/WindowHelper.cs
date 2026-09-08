@@ -14,7 +14,7 @@ using System.Drawing;
 namespace AppGroup {
     public class WindowHelper {
         private readonly Window _window;
-        private AppWindow _appWindow = null!;
+        private readonly AppWindow _appWindow;
         private IntPtr _hWnd;
         private SystemBackdropConfiguration? _configurationSource;
         private MicaBackdrop? _micaBackdrop;
@@ -67,6 +67,9 @@ namespace AppGroup {
         public WindowHelper(Window window) {
             _window = window ?? throw new ArgumentNullException(nameof(window));
             _subClassDelegate = new SUBCLASSPROC(WindowSubClass);
+            _hWnd = WindowNative.GetWindowHandle(_window);
+            var windowId = Win32Interop.GetWindowIdFromWindow(_hWnd);
+            _appWindow = AppWindow.GetFromWindowId(windowId);
             InitializeWindow();
         }
 
@@ -152,10 +155,6 @@ namespace AppGroup {
         }
 
         private void InitializeWindow() {
-            _hWnd = WindowNative.GetWindowHandle(_window);
-            var windowId = Win32Interop.GetWindowIdFromWindow(_hWnd);
-            _appWindow = AppWindow.GetFromWindowId(windowId);
-
             SetWindowSubclass(_hWnd, _subClassDelegate, 0, 0);
 
 
